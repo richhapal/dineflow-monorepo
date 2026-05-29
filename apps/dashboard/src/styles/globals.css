@@ -1,0 +1,24 @@
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --ink: #0A0A0A; --ink2: #2A2A2A; --ink3: #555; --ink4: #888; --ink5: #BBB;
+  --paper: #FAFAF8; --paper2: #F4F3EF; --paper3: #EDECEA; --paper4: #E6E4E0;
+  --accent: #B85C2C; --accent2: #D4784A; --accent-bg: #FDF0E8;
+  --accent-border: rgba(184,92,44,0.18);
+  --green: #2D7A4A; --green-bg: #EAF3EE;
+  --red: #A32D2D; --red-bg: #FAECE7;
+  --amber: #854F0B; --amber-bg: #FAEEDA;
+  --blue: #185FA5; --blue-bg: #E6F1FB;
+  --border: #E2E0DA; --border2: #CCCAC4;
+  --sidebar-width: 240px; --header-height: 56px;
+  --radius: 10px; --radius-lg: 14px;
+}
+
+html { scroll-behavior: smooth; }
+body {
+  background: var(--paper); color: var(--ink);
+  font-family: 'Geist', -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

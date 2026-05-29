@@ -1,0 +1,1188 @@
+// =============================================================================
+// DineFlow — Complete Prisma Schema
+// 45 Models · 21 Enums · Multi-tenant SaaS · Multilingual · GST Billing
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum SubscriptionPlan {
+  STARTER       // ₹299/mo — QR menu only
+  GROWTH        // ₹999/mo — ordering + payments
+  PRO           // ₹2499/mo — waiter + analytics + themes
+  ENTERPRISE    // custom — multi-branch + white-label
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  PAUSED
+}
+
+enum StaffRole {
+  OWNER
+  ADMIN
+  MANAGER
+  WAITER
+  KITCHEN
+  CASHIER
+}
+
+enum OrderStatus {
+  PENDING       // placed, not yet acknowledged
+  CONFIRMED     // restaurant confirmed
+  PREPARING     // kitchen is preparing
+  READY         // food is ready, waiting to serve
+  SERVED        // delivered to table
+  COMPLETED     // bill paid and closed
+  CANCELLED
+}
+
+enum OrderType {
+  DINE_IN
+  ROOM_SERVICE
+  TAKEAWAY
+  WAITER_PLACED // staff placed on behalf of customer
+}
+
+enum PaymentMethod {
+  UPI
+  CASH
+  CARD
+  ONLINE        // Razorpay / Stripe
+  COMPLIMENTARY
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  PARTIALLY_PAID
+  REFUNDED
+  FAILED
+}
+
+enum BillStatus {
+  DRAFT
+  GENERATED
+  SENT          // sent to customer via WhatsApp / SMS
+  PAID
+  CANCELLED
+}
+
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED
+  RESERVED
+  CLEANING
+}
+
+enum FoodType {
+  VEG
+  NON_VEG
+  VEGAN
+  EGG
+  CONTAINS_ALCOHOL
+}
+
+enum ThemePlan {
+  FREE
+  PREMIUM
+}
+
+enum OrderingMode {
+  SELF
+  WAITER
+  HYBRID
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  LEAVE
+  HOLIDAY
+}
+
+enum SalaryType {
+  MONTHLY
+  DAILY
+  HOURLY
+}
+
+enum NotificationChannel {
+  WHATSAPP
+  SMS
+  EMAIL
+  PUSH
+}
+
+enum DiscountType {
+  PERCENTAGE      // 30% off
+  FIXED_AMOUNT    // ₹50 off
+  BUY_X_GET_Y     // buy 2 get 1 free
+  FREE_ITEM       // complimentary item added
+}
+
+enum DiscountScope {
+  ENTIRE_ORDER    // applied to whole bill
+  CATEGORY        // all items in a category
+  SPECIFIC_ITEM   // one specific menu item
+  ITEM_TAG        // all items sharing a tag
+}
+
+enum DiscountAppliedBy {
+  CUSTOMER_AUTO   // auto-applied when conditions met
+  WAITER_MANUAL   // waiter applies during order
+  COUPON_CODE     // customer enters a code
+}
+
+enum CollectionType {
+  CHEFS_SPECIAL
+  TOP_PICKS           // analytics-driven, auto-updated nightly
+  STAFF_RECOMMENDATION
+  SEASONAL
+  HAPPY_HOUR          // time-gated
+  NEW_ARRIVALS        // auto: items added in last 14 days
+  MUST_TRY
+  HEALTHY_CHOICES
+  CUSTOM              // restaurant defines their own label
+}
+
+enum LanguageCode {
+  en    // English  (default)
+  hi    // Hindi
+  kn    // Kannada
+  ta    // Tamil
+  te    // Telugu
+  mr    // Marathi
+  bn    // Bengali
+  gu    // Gujarati
+  ml    // Malayalam
+  pa    // Punjabi
+  or    // Odia
+  ur    // Urdu        (RTL)
+  as_   // Assamese    (mapped as "as" in DB)
+  kok   // Konkani
+  ru    // Russian
+  de    // German
+  es    // Spanish
+  fr    // French
+  he    // Hebrew      (RTL)
+  ja    // Japanese
+  ko    // Korean
+  ar    // Arabic      (RTL)
+  zh    // Chinese
+  it    // Italian
+  pt    // Portuguese
+  tr    // Turkish
+}
+
+// =============================================================================
+// CORE — RESTAURANT & SUBSCRIPTION
+// =============================================================================
+
+model Restaurant {
+  id                   String             @id @default(cuid())
+  slug                 String             @unique
+  // slug used in QR URL: dineflow.app/m/{slug}/table-7
+
+  name                 String
+  description          String?
+  phone                String?
+  email                String?
+  address              String?
+  city                 String?
+  state                String?
+  country              String             @default("IN")
+  pincode              String?
+  timezone             String             @default("Asia/Kolkata")
+
+  // ── Legal & GST ──────────────────────────────────────────────
+  gstin                String?            // 15-char GSTIN
+  fssai_number         String?
+  pan_number           String?
+  gst_rate             Decimal            @default(0.05) @db.Decimal(4,2)
+  // 0.05 = 5% (most restaurants), 0.18 = 18% (with liquor licence)
+  service_charge_rate  Decimal            @default(0.00) @db.Decimal(4,2)
+  is_gst_inclusive     Boolean            @default(false)
+
+  // ── Payments ─────────────────────────────────────────────────
+  upi_id               String?
+  upi_qr_public_id     String?            // Cloudinary
+  razorpay_key_id      String?
+  razorpay_secret      String?            // encrypted at rest
+
+  // ── Branding / Media (Cloudinary public_ids) ─────────────────
+  logo_public_id       String?
+  hero_public_id       String?
+  favicon_public_id    String?
+
+  // ── Theme ────────────────────────────────────────────────────
+  active_theme_id      String?
+  theme_config         Json?
+  // { id, bg, card, accent, text, muted, border, btnText, font }
+  custom_domain        String?            @unique  // Enterprise only
+
+  // ── Language settings ────────────────────────────────────────
+  default_language     LanguageCode       @default(en)
+  enabled_languages    LanguageCode[]     @default([en, hi])
+
+  // ── Operational flags ────────────────────────────────────────
+  is_ordering_enabled  Boolean            @default(true)
+  is_open              Boolean            @default(true)
+  is_ordering_paused   Boolean            @default(false)
+  auto_accept_orders   Boolean            @default(false)
+  whatsapp_bill        Boolean            @default(true)
+  sms_bill             Boolean            @default(false)
+  ordering_mode        OrderingMode       @default(SELF)
+
+  // ── Subscription ─────────────────────────────────────────────
+  plan                 SubscriptionPlan   @default(STARTER)
+  subscription_status  SubscriptionStatus @default(TRIAL)
+  trial_ends_at        DateTime?
+  current_period_start DateTime?
+  current_period_end   DateTime?
+
+  // ── Billing counters ─────────────────────────────────────────
+  invoice_seq_counter  Int                @default(0)
+  // Atomically incremented per invoice — guarantees sequential numbers
+  financial_year_start Int                @default(4) // April
+
+  created_at           DateTime           @default(now())
+  updated_at           DateTime           @updatedAt
+  deleted_at           DateTime?
+
+  // ── Relations ────────────────────────────────────────────────
+  activeTheme          Theme?             @relation(fields: [active_theme_id], references: [id])
+  staff                Staff[]
+  tables               RestaurantTable[]
+  rooms                Room[]
+  menuCategories       MenuCategory[]
+  menuItems            MenuItem[]
+  menuCollections      MenuCollection[]
+  discounts            Discount[]
+  orders               Order[]
+  bills                Bill[]
+  payments             Payment[]
+  qrCodes              QRCode[]
+  customerSessions     CustomerSession[]
+  subscriptionEvents   SubscriptionEvent[]
+  foreignLanguages     RestaurantLanguage[]
+  payrollPeriods       PayrollPeriod[]
+  dailyAnalytics       DailyAnalytics[]
+  notifications        NotificationLog[]
+  businessHours        BusinessHours[]
+  holidays             Holiday[]
+
+  @@index([slug])
+  @@index([city])
+  @@index([plan])
+  @@map("restaurants")
+}
+
+model SubscriptionEvent {
+  id            String             @id @default(cuid())
+  restaurant_id String
+  plan          SubscriptionPlan
+  status        SubscriptionStatus
+  amount        Decimal            @db.Decimal(10,2)
+  currency      String             @default("INR")
+  payment_ref   String?
+  notes         String?
+  created_at    DateTime           @default(now())
+
+  restaurant    Restaurant         @relation(fields: [restaurant_id], references: [id])
+
+  @@index([restaurant_id])
+  @@map("subscription_events")
+}
+
+// Tracks which foreign-language add-ons a restaurant has purchased
+model RestaurantLanguage {
+  id            String       @id @default(cuid())
+  restaurant_id String
+  lang_code     LanguageCode
+  unlocked_at   DateTime     @default(now())
+  amount_paid   Decimal      @db.Decimal(10,2)
+
+  restaurant    Restaurant   @relation(fields: [restaurant_id], references: [id])
+
+  @@unique([restaurant_id, lang_code])
+  @@map("restaurant_languages")
+}
+
+// =============================================================================
+// STAFF & HR
+// =============================================================================
+
+model Staff {
+  id               String      @id @default(cuid())
+  restaurant_id    String
+  name             String
+  phone            String
+  email            String?
+  role             StaffRole
+  pin              String?     // 4-digit PIN for quick tablet login
+  password_hash    String?
+  avatar_public_id String?
+
+  salary_type      SalaryType  @default(MONTHLY)
+  salary_amount    Decimal     @db.Decimal(10,2)
+  joined_at        DateTime    @default(now())
+  relieved_at      DateTime?
+
+  is_active        Boolean     @default(true)
+  can_give_discount Boolean    @default(false)
+  max_discount_pct Decimal     @default(0) @db.Decimal(4,2)
+
+  created_at       DateTime    @default(now())
+  updated_at       DateTime    @updatedAt
+  deleted_at       DateTime?
+
+  restaurant       Restaurant  @relation(fields: [restaurant_id], references: [id])
+  waiterOrders     Order[]     @relation("WaiterOrders")
+  appliedDiscounts AppliedDiscount[]
+  attendance       Attendance[]
+  salaryPayments   SalaryPayment[]
+
+  @@unique([restaurant_id, phone])
+  @@index([restaurant_id, role])
+  @@map("staff")
+}
+
+model Attendance {
+  id            String           @id @default(cuid())
+  staff_id      String
+  restaurant_id String
+  date          DateTime         @db.Date
+  status        AttendanceStatus @default(PRESENT)
+  check_in      DateTime?
+  check_out     DateTime?
+  notes         String?
+
+  staff         Staff            @relation(fields: [staff_id], references: [id])
+
+  @@unique([staff_id, date])
+  @@index([restaurant_id, date])
+  @@map("attendance")
+}
+
+model PayrollPeriod {
+  id             String          @id @default(cuid())
+  restaurant_id  String
+  period_start   DateTime        @db.Date
+  period_end     DateTime        @db.Date
+  status         String          @default("DRAFT") // DRAFT | PROCESSED | PAID
+  total_amount   Decimal         @db.Decimal(12,2)
+  created_at     DateTime        @default(now())
+
+  restaurant     Restaurant      @relation(fields: [restaurant_id], references: [id])
+  salaryPayments SalaryPayment[]
+
+  @@index([restaurant_id])
+  @@map("payroll_periods")
+}
+
+model SalaryPayment {
+  id                String        @id @default(cuid())
+  staff_id          String
+  restaurant_id     String
+  payroll_period_id String
+  amount            Decimal       @db.Decimal(10,2)
+  deductions        Decimal       @default(0) @db.Decimal(10,2)
+  bonus             Decimal       @default(0) @db.Decimal(10,2)
+  net_amount        Decimal       @db.Decimal(10,2)
+  payment_method    String        @default("CASH")
+  payment_ref       String?
+  paid_at           DateTime?
+  notes             String?
+  created_at        DateTime      @default(now())
+
+  staff             Staff         @relation(fields: [staff_id], references: [id])
+  payrollPeriod     PayrollPeriod @relation(fields: [payroll_period_id], references: [id])
+
+  @@index([staff_id])
+  @@index([restaurant_id])
+  @@map("salary_payments")
+}
+
+// =============================================================================
+// TABLES, ROOMS & QR CODES
+// =============================================================================
+
+model RestaurantTable {
+  id            String      @id @default(cuid())
+  restaurant_id String
+  name          String      // "Table 7", "Bar Seat 3"
+  section       String?     // "Ground Floor", "Rooftop", "Bar"
+  capacity      Int         @default(4)
+  status        TableStatus @default(AVAILABLE)
+  position_x    Float?      // for floor-plan drag UI
+  position_y    Float?
+  is_active     Boolean     @default(true)
+  created_at    DateTime    @default(now())
+
+  restaurant    Restaurant  @relation(fields: [restaurant_id], references: [id])
+  qrCodes       QRCode[]
+  orders        Order[]
+
+  @@unique([restaurant_id, name])
+  @@index([restaurant_id])
+  @@map("restaurant_tables")
+}
+
+model Room {
+  id            String     @id @default(cuid())
+  restaurant_id String
+  name          String     // "Room 301", "Suite 12"
+  floor         String?
+  capacity      Int        @default(2)
+  is_active     Boolean    @default(true)
+  created_at    DateTime   @default(now())
+
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id])
+  qrCodes       QRCode[]
+  orders        Order[]
+
+  @@unique([restaurant_id, name])
+  @@index([restaurant_id])
+  @@map("rooms")
+}
+
+model QRCode {
+  id            String          @id @default(cuid())
+  restaurant_id String
+  table_id      String?
+  room_id       String?
+  label         String          // "Table 7", "Room 301"
+  slug          String          @unique
+  // full URL: dineflow.app/m/{restaurant_slug}/{slug}
+  scans         Int             @default(0)
+  is_active     Boolean         @default(true)
+  created_at    DateTime        @default(now())
+
+  restaurant    Restaurant      @relation(fields: [restaurant_id], references: [id])
+  table         RestaurantTable? @relation(fields: [table_id], references: [id])
+  room          Room?           @relation(fields: [room_id], references: [id])
+  scanLogs      QRScanLog[]
+
+  @@index([restaurant_id])
+  @@map("qr_codes")
+}
+
+model QRScanLog {
+  id          String       @id @default(cuid())
+  qr_code_id  String
+  scanned_at  DateTime     @default(now())
+  ip_address  String?
+  user_agent  String?
+  lang_code   LanguageCode @default(en)
+
+  qrCode      QRCode       @relation(fields: [qr_code_id], references: [id])
+
+  @@index([qr_code_id])
+  @@index([scanned_at])
+  @@map("qr_scan_logs")
+}
+
+// =============================================================================
+// MENU — CATEGORIES
+// =============================================================================
+
+model MenuCategory {
+  id              String                    @id @default(cuid())
+  restaurant_id   String
+  name            String                    // English base
+  description     String?
+  image_public_id String?
+  sort_order      Int                       @default(0)
+  is_active       Boolean                   @default(true)
+  created_at      DateTime                  @default(now())
+  updated_at      DateTime                  @updatedAt
+  deleted_at      DateTime?
+
+  restaurant      Restaurant                @relation(fields: [restaurant_id], references: [id])
+  menuItems       MenuItem[]
+  translations    MenuCategoryTranslation[]
+  discounts       Discount[]                @relation("CategoryDiscounts")
+
+  @@index([restaurant_id, sort_order])
+  @@map("menu_categories")
+}
+
+model MenuCategoryTranslation {
+  id          String       @id @default(cuid())
+  category_id String
+  lang_code   LanguageCode
+  name        String
+  description String?
+  is_ai       Boolean      @default(true)
+  created_at  DateTime     @default(now())
+  updated_at  DateTime     @updatedAt
+
+  category    MenuCategory @relation(fields: [category_id], references: [id], onDelete: Cascade)
+
+  @@unique([category_id, lang_code])
+  @@map("menu_category_translations")
+}
+
+// =============================================================================
+// MENU — ITEMS, VARIANTS, ADDONS
+// =============================================================================
+
+model MenuItem {
+  id              String       @id @default(cuid())
+  restaurant_id   String
+  category_id     String
+  name            String       // English base name
+  description     String?
+  image_public_id String?      // Cloudinary public_id — NEVER store URL
+  base_price      Decimal      @db.Decimal(10,2)
+  food_type       FoodType     @default(VEG)
+  hsn_code        String       @default("996331")
+  tags            String[]     // ["spicy","bestseller","gluten-free"]
+  allergens       String[]     // ["gluten","dairy","nuts"]
+  calories        Int?
+  prep_time_mins  Int?
+  is_available    Boolean      @default(true)
+  is_featured     Boolean      @default(false)
+  is_bestseller   Boolean      @default(false)
+  sort_order      Int          @default(0)
+  created_at      DateTime     @default(now())
+  updated_at      DateTime     @updatedAt
+  deleted_at      DateTime?    // NEVER hard-delete — GST audit trail
+
+  restaurant      Restaurant   @relation(fields: [restaurant_id], references: [id])
+  category        MenuCategory @relation(fields: [category_id], references: [id])
+  translations    MenuItemTranslation[]
+  variants        MenuItemVariant[]
+  addonGroups     AddonGroup[]
+  collectionItems MenuCollectionItem[]
+  orderItems      OrderItem[]
+  discounts       Discount[]   @relation("ItemDiscounts")
+  analytics       MenuItemAnalytics[]
+  score           MenuItemScore?
+
+  @@index([restaurant_id, category_id])
+  @@index([restaurant_id, is_available])
+  @@map("menu_items")
+}
+
+// One row per language per item — the entire multilingual system
+model MenuItemTranslation {
+  id          String       @id @default(cuid())
+  item_id     String
+  lang_code   LanguageCode
+  name        String
+  description String?
+  is_ai       Boolean      @default(true)
+  // true = AI-generated, false = manually edited by restaurant
+  created_at  DateTime     @default(now())
+  updated_at  DateTime     @updatedAt
+
+  item        MenuItem     @relation(fields: [item_id], references: [id], onDelete: Cascade)
+
+  @@unique([item_id, lang_code])
+  @@index([item_id])
+  @@map("menu_item_translations")
+}
+
+// e.g. Size: Small / Medium / Large  or  Half / Full
+model MenuItemVariant {
+  id           String   @id @default(cuid())
+  item_id      String
+  name         String
+  price        Decimal  @db.Decimal(10,2)
+  is_default   Boolean  @default(false)
+  is_available Boolean  @default(true)
+  sort_order   Int      @default(0)
+  created_at   DateTime @default(now())
+
+  item         MenuItem   @relation(fields: [item_id], references: [id], onDelete: Cascade)
+  orderItems   OrderItem[]
+
+  @@index([item_id])
+  @@map("menu_item_variants")
+}
+
+// Addon groups: "Extra Toppings", "Spice Level", "Add Cheese?"
+model AddonGroup {
+  id          String   @id @default(cuid())
+  item_id     String
+  name        String
+  is_required Boolean  @default(false)
+  min_select  Int      @default(0)
+  max_select  Int      @default(1)
+  sort_order  Int      @default(0)
+  created_at  DateTime @default(now())
+
+  item        MenuItem @relation(fields: [item_id], references: [id], onDelete: Cascade)
+  addons      Addon[]
+
+  @@index([item_id])
+  @@map("addon_groups")
+}
+
+model Addon {
+  id              String     @id @default(cuid())
+  group_id        String
+  name            String
+  price           Decimal    @default(0) @db.Decimal(10,2)
+  is_available    Boolean    @default(true)
+  sort_order      Int        @default(0)
+  created_at      DateTime   @default(now())
+
+  group           AddonGroup @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  orderItemAddons OrderItemAddon[]
+
+  @@index([group_id])
+  @@map("addons")
+}
+
+// =============================================================================
+// MENU — COLLECTIONS (Chef's Specials, Top Picks, Happy Hour, etc.)
+// =============================================================================
+
+model MenuCollection {
+  id              String         @id @default(cuid())
+  restaurant_id   String
+  type            CollectionType
+  name            String         // "Chef's Table", "Rooftop Favourites"
+  description     String?
+  emoji           String?        // "👨‍🍳" shown on customer menu pill
+  image_public_id String?
+  is_active       Boolean        @default(true)
+  is_auto         Boolean        @default(false)
+  // true = nightly BullMQ job updates items automatically
+  display_on_menu Boolean        @default(true)
+  sort_order      Int            @default(0)
+  valid_from_time String?        // "18:00" for happy hour start
+  valid_until_time String?       // "21:00" for happy hour end
+  days_of_week    Int[]          // [0..6] — 0=Sun. Empty = all days
+  created_at      DateTime       @default(now())
+  updated_at      DateTime       @updatedAt
+
+  restaurant      Restaurant     @relation(fields: [restaurant_id], references: [id])
+  items           MenuCollectionItem[]
+  translations    MenuCollectionTranslation[]
+
+  @@index([restaurant_id, is_active])
+  @@map("menu_collections")
+}
+
+model MenuCollectionItem {
+  id            String         @id @default(cuid())
+  collection_id String
+  menu_item_id  String
+  sort_order    Int            @default(0)
+  chef_note     String?
+  // e.g. "Slow-cooked for 6 hours — our most requested dish"
+  added_manually Boolean       @default(true)
+  // false = added by analytics engine, true = manually by owner
+  added_at      DateTime       @default(now())
+
+  collection    MenuCollection @relation(fields: [collection_id], references: [id], onDelete: Cascade)
+  menuItem      MenuItem       @relation(fields: [menu_item_id], references: [id])
+
+  @@unique([collection_id, menu_item_id])
+  @@index([collection_id])
+  @@map("menu_collection_items")
+}
+
+model MenuCollectionTranslation {
+  id            String         @id @default(cuid())
+  collection_id String
+  lang_code     LanguageCode
+  name          String
+  description   String?
+  is_ai         Boolean        @default(true)
+  created_at    DateTime       @default(now())
+
+  collection    MenuCollection @relation(fields: [collection_id], references: [id], onDelete: Cascade)
+
+  @@unique([collection_id, lang_code])
+  @@map("menu_collection_translations")
+}
+
+// =============================================================================
+// DISCOUNTS & PROMOTIONS
+// =============================================================================
+
+model Discount {
+  id               String            @id @default(cuid())
+  restaurant_id    String
+  name             String            // "Happy Hour 30%", "Weekend Special"
+  description      String?
+  code             String?           // coupon code (optional)
+  type             DiscountType
+  scope            DiscountScope
+  applied_by       DiscountAppliedBy @default(CUSTOMER_AUTO)
+
+  // ── Value ────────────────────────────────────────────────────
+  value            Decimal           @db.Decimal(8,2)
+  // 30 = 30% or ₹30 depending on type
+  max_discount_cap Decimal?          @db.Decimal(10,2)
+  // caps saving even if % exceeds this — e.g. max ₹500 off
+  min_order_amount Decimal?          @db.Decimal(10,2)
+
+  // ── Scope targets (only one used depending on scope) ─────────
+  category_id      String?
+  menu_item_id     String?
+  item_tag         String?           // matches MenuItem.tags[]
+
+  // ── Buy X Get Y ───────────────────────────────────────────────
+  buy_quantity     Int?
+  get_quantity     Int?
+  get_item_id      String?           // null = same item is free
+
+  // ── Validity & limits ────────────────────────────────────────
+  is_active        Boolean           @default(true)
+  valid_from       DateTime?
+  valid_until      DateTime?
+  days_of_week     Int[]             // [0,6] = weekends only
+  valid_from_time  String?           // "18:00"
+  valid_until_time String?           // "21:00"
+  max_uses_total   Int?              // null = unlimited
+  max_uses_per_day Int?
+  current_uses     Int               @default(0)
+
+  // ── Permissions ───────────────────────────────────────────────
+  staff_roles      StaffRole[]       // which roles can apply manually
+  requires_approval Boolean          @default(false)
+
+  created_at       DateTime          @default(now())
+  updated_at       DateTime          @updatedAt
+  deleted_at       DateTime?
+
+  restaurant       Restaurant        @relation(fields: [restaurant_id], references: [id])
+  category         MenuCategory?     @relation("CategoryDiscounts", fields: [category_id], references: [id])
+  menuItem         MenuItem?         @relation("ItemDiscounts", fields: [menu_item_id], references: [id])
+  appliedDiscounts AppliedDiscount[]
+
+  @@index([restaurant_id, is_active])
+  @@index([restaurant_id, code])
+  @@map("discounts")
+}
+
+// Snapshot of every discount applied — never mutate, only append
+model AppliedDiscount {
+  id             String       @id @default(cuid())
+  order_id       String
+  discount_id    String
+  restaurant_id  String
+  discount_name  String       // SNAPSHOT
+  discount_type  DiscountType // SNAPSHOT
+  discount_value Decimal      @db.Decimal(8,2)   // SNAPSHOT
+  amount_saved   Decimal      @db.Decimal(10,2)  // actual ₹ saved
+  applied_by_id  String?      // staff_id if manually applied
+
+  applied_at     DateTime     @default(now())
+
+  order          Order        @relation(fields: [order_id], references: [id])
+  discount       Discount     @relation(fields: [discount_id], references: [id])
+  appliedBy      Staff?       @relation(fields: [applied_by_id], references: [id])
+
+  @@index([order_id])
+  @@index([restaurant_id])
+  @@map("applied_discounts")
+}
+
+// =============================================================================
+// ORDERS
+// =============================================================================
+
+model Order {
+  id              String      @id @default(cuid())
+  restaurant_id   String
+  table_id        String?
+  room_id         String?
+  waiter_id       String?
+  order_type      OrderType   @default(DINE_IN)
+  status          OrderStatus @default(PENDING)
+
+  // ── Customer info (from QR scan session) ─────────────────────
+  customer_name   String?
+  customer_phone  String?
+  customer_lang   LanguageCode @default(en)
+  covers          Int         @default(1)
+  notes           String?
+
+  // ── Session link ─────────────────────────────────────────────
+  session_id      String?
+
+  // ── Idempotency ───────────────────────────────────────────────
+  idempotency_key String      @unique
+  // UUID generated by frontend when cart is built.
+  // If network drops and customer retries, backend returns
+  // the existing order instead of creating a duplicate.
+
+  // ── Price snapshot (NEVER recalculate from live menu) ────────
+  subtotal        Decimal     @db.Decimal(10,2)
+  cgst_amount     Decimal     @default(0) @db.Decimal(10,2)
+  sgst_amount     Decimal     @default(0) @db.Decimal(10,2)
+  service_charge  Decimal     @default(0) @db.Decimal(10,2)
+  discount_amount Decimal     @default(0) @db.Decimal(10,2)
+  total_amount    Decimal     @db.Decimal(10,2)
+
+  // ── Timestamps ────────────────────────────────────────────────
+  confirmed_at    DateTime?
+  prepared_at     DateTime?
+  served_at       DateTime?
+  completed_at    DateTime?
+  estimated_ready DateTime?   // shown on customer live tracker
+
+  created_at      DateTime    @default(now())
+  updated_at      DateTime    @updatedAt
+  deleted_at      DateTime?
+
+  restaurant      Restaurant       @relation(fields: [restaurant_id], references: [id])
+  table           RestaurantTable? @relation(fields: [table_id], references: [id])
+  room            Room?            @relation(fields: [room_id], references: [id])
+  waiter          Staff?           @relation("WaiterOrders", fields: [waiter_id], references: [id])
+  session         CustomerSession? @relation(fields: [session_id], references: [id])
+  items           OrderItem[]
+  statusHistory   OrderStatusHistory[]
+  appliedDiscounts AppliedDiscount[]
+  bill            Bill?
+  payments        Payment[]
+
+  @@index([restaurant_id, status])
+  @@index([restaurant_id, created_at])
+  @@index([table_id, status])
+  @@index([idempotency_key])
+  @@map("orders")
+}
+
+model OrderItem {
+  id           String          @id @default(cuid())
+  order_id     String
+  menu_item_id String
+  variant_id   String?
+  quantity     Int
+  unit_price   Decimal         @db.Decimal(10,2) // SNAPSHOT
+  total_price  Decimal         @db.Decimal(10,2)
+  item_name    String                             // SNAPSHOT
+  notes        String?         // "no onions", "extra spicy"
+  is_cancelled Boolean         @default(false)
+  created_at   DateTime        @default(now())
+
+  order        Order           @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  menuItem     MenuItem        @relation(fields: [menu_item_id], references: [id])
+  variant      MenuItemVariant? @relation(fields: [variant_id], references: [id])
+  addons       OrderItemAddon[]
+
+  @@index([order_id])
+  @@map("order_items")
+}
+
+model OrderItemAddon {
+  id            String    @id @default(cuid())
+  order_item_id String
+  addon_id      String
+  addon_name    String    // SNAPSHOT
+  price         Decimal   @db.Decimal(10,2) // SNAPSHOT
+
+  orderItem     OrderItem @relation(fields: [order_item_id], references: [id], onDelete: Cascade)
+  addon         Addon     @relation(fields: [addon_id], references: [id])
+
+  @@map("order_item_addons")
+}
+
+model OrderStatusHistory {
+  id         String      @id @default(cuid())
+  order_id   String
+  status     OrderStatus
+  changed_by String?     // staff_id | "customer" | "system"
+  notes      String?
+  created_at DateTime    @default(now())
+
+  order      Order       @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  @@index([order_id])
+  @@map("order_status_history")
+}
+
+// =============================================================================
+// BILLING & GST
+// =============================================================================
+
+model Bill {
+  id                  String     @id @default(cuid())
+  order_id            String     @unique
+  restaurant_id       String
+  invoice_number      String     @unique
+  // Format: DF-2025-R{restaurant_short_id}-{6-digit-seq}
+  // e.g.   DF-2025-R1A2B-004821
+  invoice_date        DateTime   @default(now())
+  financial_year      String     // "2025-26" — for GSTR-1 grouping
+
+  // ── Customer ──────────────────────────────────────────────────
+  customer_name       String?
+  customer_phone      String?
+  customer_gstin      String?    // for B2B bills only
+
+  // ── Amounts (all stored for 6-year GST audit trail) ───────────
+  subtotal            Decimal    @db.Decimal(10,2)
+  cgst_rate           Decimal    @db.Decimal(4,2)
+  cgst_amount         Decimal    @db.Decimal(10,2)
+  sgst_rate           Decimal    @db.Decimal(4,2)
+  sgst_amount         Decimal    @db.Decimal(10,2)
+  igst_rate           Decimal    @default(0) @db.Decimal(4,2)
+  igst_amount         Decimal    @default(0) @db.Decimal(10,2)
+  service_charge      Decimal    @default(0) @db.Decimal(10,2)
+  discount_amount     Decimal    @default(0) @db.Decimal(10,2)
+  round_off           Decimal    @default(0) @db.Decimal(6,2)
+  total_amount        Decimal    @db.Decimal(10,2)
+  hsn_code            String     @default("996331")
+
+  status              BillStatus @default(GENERATED)
+
+  // ── Delivery tracking ─────────────────────────────────────────
+  whatsapp_sent       Boolean    @default(false)
+  whatsapp_sent_at    DateTime?
+  sms_sent            Boolean    @default(false)
+  email_sent          Boolean    @default(false)
+  print_count         Int        @default(0)
+  last_printed_at     DateTime?
+
+  created_at          DateTime   @default(now())
+  updated_at          DateTime   @updatedAt
+  cancelled_at        DateTime?
+  cancellation_reason String?
+
+  order               Order      @relation(fields: [order_id], references: [id])
+  restaurant          Restaurant @relation(fields: [restaurant_id], references: [id])
+  payments            Payment[]
+
+  @@index([restaurant_id, invoice_date])
+  @@index([restaurant_id, financial_year])
+  @@index([invoice_number])
+  @@map("bills")
+}
+
+model Payment {
+  id                 String        @id @default(cuid())
+  order_id           String
+  bill_id            String?
+  restaurant_id      String
+  method             PaymentMethod
+  status             PaymentStatus @default(PENDING)
+  amount             Decimal       @db.Decimal(10,2)
+  currency           String        @default("INR")
+  gateway_ref        String?       // Razorpay order_id
+  gateway_payment_id String?       // Razorpay payment_id
+  upi_txn_id         String?
+  utr_number         String?       // UPI UTR for reconciliation
+  notes              String?
+  paid_at            DateTime?
+  refunded_at        DateTime?
+  refund_amount      Decimal?      @db.Decimal(10,2)
+  created_at         DateTime      @default(now())
+
+  order              Order         @relation(fields: [order_id], references: [id])
+  bill               Bill?         @relation(fields: [bill_id], references: [id])
+  restaurant         Restaurant    @relation(fields: [restaurant_id], references: [id])
+
+  @@index([order_id])
+  @@index([restaurant_id, paid_at])
+  @@map("payments")
+}
+
+// =============================================================================
+// THEMES
+// =============================================================================
+
+model Theme {
+  id            String      @id @default(cuid())
+  name          String      // "Lumina", "Zen", "Obsidian"
+  slug          String      @unique
+  plan          ThemePlan   @default(FREE)
+  preview_image String?     // Cloudinary
+  config        Json
+  // { bg, card, accent, text, muted, border, btnText, font }
+  is_active     Boolean     @default(true)
+  sort_order    Int         @default(0)
+  created_at    DateTime    @default(now())
+
+  restaurants   Restaurant[]
+
+  @@map("themes")
+}
+
+// =============================================================================
+// ITEM-LEVEL ANALYTICS & RANKING (drives Top Picks)
+// =============================================================================
+
+// One row per item per day — written by BullMQ job, never inline
+model MenuItemAnalytics {
+  id                  String   @id @default(cuid())
+  menu_item_id        String
+  restaurant_id       String
+  date                DateTime @db.Date
+
+  times_ordered       Int      @default(0)
+  total_quantity      Int      @default(0)
+  total_revenue       Decimal  @default(0) @db.Decimal(12,2)
+  times_viewed        Int      @default(0)  // from menu browse events
+  times_added_to_cart Int      @default(0)
+  cart_to_order_rate  Decimal  @default(0) @db.Decimal(5,4)
+  avg_rating          Decimal? @db.Decimal(3,2)
+  rating_count        Int      @default(0)
+
+  menuItem            MenuItem @relation(fields: [menu_item_id], references: [id])
+
+  @@unique([menu_item_id, date])
+  @@index([restaurant_id, date])
+  @@map("menu_item_analytics")
+}
+
+// One row per item — updated nightly. Read by dashboard and Top Picks engine
+model MenuItemScore {
+  id               String   @id @default(cuid())
+  menu_item_id     String   @unique
+  restaurant_id    String
+  score            Decimal  @db.Decimal(10,4)
+  // Weighted: orders×0.4 + revenue×0.25 + cart_rate×0.15 + trend×0.1 + views×0.1
+  order_rank       Int      // 1 = most ordered
+  revenue_rank     Int      // 1 = highest revenue
+  trending_rank    Int      // 1 = biggest week-on-week growth
+  last_computed_at DateTime @default(now())
+
+  menuItem         MenuItem @relation(fields: [menu_item_id], references: [id])
+
+  @@index([restaurant_id, score])
+  @@map("menu_item_scores")
+}
+
+// =============================================================================
+// RESTAURANT-LEVEL ANALYTICS
+// =============================================================================
+
+model DailyAnalytics {
+  id               String     @id @default(cuid())
+  restaurant_id    String
+  date             DateTime   @db.Date
+
+  total_orders     Int        @default(0)
+  completed_orders Int        @default(0)
+  cancelled_orders Int        @default(0)
+  gross_revenue    Decimal    @default(0) @db.Decimal(12,2)
+  net_revenue      Decimal    @default(0) @db.Decimal(12,2)
+  gst_collected    Decimal    @default(0) @db.Decimal(12,2)
+  discount_given   Decimal    @default(0) @db.Decimal(12,2)
+  avg_order_value  Decimal    @default(0) @db.Decimal(10,2)
+  qr_scans         Int        @default(0)
+  unique_customers Int        @default(0)
+  peak_hour        Int?       // 0–23
+  top_item_id      String?
+  top_category_id  String?
+
+  created_at       DateTime   @default(now())
+  updated_at       DateTime   @updatedAt
+
+  restaurant       Restaurant @relation(fields: [restaurant_id], references: [id])
+
+  @@unique([restaurant_id, date])
+  @@index([restaurant_id, date])
+  @@map("daily_analytics")
+}
+
+// =============================================================================
+// CUSTOMER SESSION (anonymous, from QR scan)
+// =============================================================================
+
+model CustomerSession {
+  id            String       @id @default(cuid())
+  restaurant_id String
+  qr_code_id    String?
+  table_id      String?
+  room_id       String?
+  name          String?
+  phone         String?
+  lang_code     LanguageCode @default(en)
+  session_token String       @unique @default(cuid())
+  expires_at    DateTime
+  created_at    DateTime     @default(now())
+
+  restaurant    Restaurant   @relation(fields: [restaurant_id], references: [id])
+  orders        Order[]
+
+  @@index([session_token])
+  @@index([restaurant_id])
+  @@map("customer_sessions")
+}
+
+// =============================================================================
+// NOTIFICATIONS
+// =============================================================================
+
+model NotificationLog {
+  id            String              @id @default(cuid())
+  restaurant_id String
+  channel       NotificationChannel
+  recipient     String
+  template      String
+  // "bill_whatsapp" | "order_confirmed" | "gst_monthly" | "order_ready"
+  payload       Json?
+  status        String              @default("SENT") // SENT | FAILED | DELIVERED
+  provider_ref  String?             // Twilio SID etc.
+  error         String?
+  sent_at       DateTime            @default(now())
+
+  restaurant    Restaurant          @relation(fields: [restaurant_id], references: [id])
+
+  @@index([restaurant_id, sent_at])
+  @@map("notification_logs")
+}
+
+// =============================================================================
+// BUSINESS HOURS & HOLIDAYS
+// =============================================================================
+
+model BusinessHours {
+  id            String     @id @default(cuid())
+  restaurant_id String
+  day_of_week   Int        // 0=Sun, 1=Mon, ..., 6=Sat
+  is_open       Boolean    @default(true)
+  open_time     String     // "09:00"
+  close_time    String     // "23:00"
+  has_break     Boolean    @default(false)
+  break_start   String?    // "14:00"
+  break_end     String?    // "15:00"
+  created_at    DateTime   @default(now())
+  updated_at    DateTime   @updatedAt
+
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id])
+
+  @@unique([restaurant_id, day_of_week])
+  @@index([restaurant_id])
+  @@map("business_hours")
+}
+
+model Holiday {
+  id            String     @id @default(cuid())
+  restaurant_id String
+  date          DateTime   @db.Date
+  reason        String
+  note          String?
+  created_at    DateTime   @default(now())
+
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id])
+
+  @@unique([restaurant_id, date])
+  @@index([restaurant_id, date])
+  @@map("holidays")
+}
+

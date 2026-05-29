@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "esnext",
+    "lib": ["esnext"],
+    "jsx": "react-native",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@dineflow/types": ["../../packages/types/src"],
+      "@dineflow/utils": ["../../packages/utils/src"],
+      "@dineflow/config": ["../../packages/config/src"]
+    }
+  }
+}
