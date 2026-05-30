@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { TableStatus } from '@dineflow/types';
 import { formatINR } from '@dineflow/utils';
 import { RestaurantTable } from './useTablesQR';
@@ -29,6 +30,7 @@ const STATUS_LABEL: Record<TableStatus, string> = {
   [TableStatus.BILL_REQUESTED]: 'Bill requested',
   [TableStatus.RESERVED]: 'Reserved',
   [TableStatus.CLEANING]: 'Cleaning',
+  [TableStatus.MAINTENANCE]: 'Maintenance',
 };
 
 export default function TableCard({
@@ -41,20 +43,37 @@ export default function TableCard({
   elapsedMin,
 }: TableCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
+  const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const style = STATUS_STYLES[table.status];
   const isOvertime = elapsedMin >= 90;
 
+  // Close on outside click
   useEffect(() => {
     if (!menuOpen) return;
     function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      if (
+        menuRef.current && !menuRef.current.contains(e.target as Node) &&
+        btnRef.current && !btnRef.current.contains(e.target as Node)
+      ) {
         setMenuOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [menuOpen]);
+
+  function openMenu(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    setMenuPos({
+      top: rect.bottom + window.scrollY + 4,
+      right: window.innerWidth - rect.right,
+    });
+    setMenuOpen((v) => !v);
+  }
 
   const nextStatuses = STATUS_ACTIONS[table.status] ?? [];
 
@@ -250,15 +269,12 @@ export default function TableCard({
 
         {/* ⋮ context menu button */}
         <div
-          ref={menuRef}
           style={{ position: 'absolute', top: 4, right: 4 }}
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setMenuOpen((v) => !v);
-            }}
+            ref={btnRef}
+            onClick={openMenu}
             style={{
               background: 'none',
               border: 'none',
@@ -273,62 +289,47 @@ export default function TableCard({
           >
             ⋮
           </button>
-
-          {menuOpen && (
-            <div
-              style={{
-                position: 'absolute',
-                top: '100%',
-                right: 0,
-                zIndex: 50,
-                background: '#fff',
-                border: '1px solid var(--border)',
-                borderRadius: 8,
-                boxShadow: '0 4px 16px rgba(0,0,0,.1)',
-                minWidth: 160,
-                overflow: 'hidden',
-              }}
-            >
-              <MenuBtn
-                onClick={() => {
-                  setMenuOpen(false);
-                  onEdit();
-                }}
-              >
-                ✏️ Edit table
-              </MenuBtn>
-
-              {nextStatuses.map((s) => (
-                <MenuBtn
-                  key={s}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onStatusChange(s);
-                  }}
-                >
-                  Mark as {STATUS_LABEL[s]}
-                </MenuBtn>
-              ))}
-
-              <div
-                style={{
-                  borderTop: '1px solid var(--border)',
-                  margin: '2px 0',
-                }}
-              />
-              <MenuBtn
-                onClick={() => {
-                  setMenuOpen(false);
-                  onDelete();
-                }}
-                danger
-              >
-                🗑 Delete table
-              </MenuBtn>
-            </div>
-          )}
         </div>
       </div>
+
+      {/* Dropdown portalled to body — escapes grid stacking context */}
+      {menuOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: 'absolute',
+            top: menuPos.top,
+            right: menuPos.right,
+            zIndex: 9999,
+            background: '#fff',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            boxShadow: '0 4px 20px rgba(0,0,0,.12)',
+            minWidth: 170,
+            overflow: 'hidden',
+          }}
+        >
+          <MenuBtn onClick={() => { setMenuOpen(false); onEdit(); }}>
+            ✏️ Edit table
+          </MenuBtn>
+
+          {nextStatuses.map((s) => (
+            <MenuBtn
+              key={s}
+              onClick={() => { setMenuOpen(false); onStatusChange(s); }}
+            >
+              Mark as {STATUS_LABEL[s]}
+            </MenuBtn>
+          ))}
+
+          <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+
+          <MenuBtn onClick={() => { setMenuOpen(false); onDelete(); }} danger>
+            🗑 Delete table
+          </MenuBtn>
+        </div>,
+        document.body,
+      )}
     </>
   );
 }

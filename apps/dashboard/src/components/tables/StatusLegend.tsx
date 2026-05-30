@@ -36,14 +36,12 @@ export const STATUS_STYLES: Record<
     color: 'var(--ink4)',
     label: 'Cleaning',
   },
-};
-
-// MAINTENANCE not in the enum but we support it visually via a local extension
-export const MAINTENANCE_STYLE = {
-  bg: '#f3f0ff',
-  border: 'rgba(100,60,180,.2)',
-  color: '#6b3fc2',
-  label: 'Maintenance',
+  [TableStatus.MAINTENANCE]: {
+    bg: '#f3f0ff',
+    border: 'rgba(100,60,180,.2)',
+    color: '#6b3fc2',
+    label: 'Maintenance',
+  },
 };
 
 const LEGEND_ORDER: TableStatus[] = [
@@ -52,6 +50,7 @@ const LEGEND_ORDER: TableStatus[] = [
   TableStatus.BILL_REQUESTED,
   TableStatus.RESERVED,
   TableStatus.CLEANING,
+  TableStatus.MAINTENANCE,
 ];
 
 export default function StatusLegend() {
