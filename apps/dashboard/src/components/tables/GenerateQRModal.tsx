@@ -78,9 +78,6 @@ export default function GenerateQRModal({
     if (createdQRs.length === 0) return;
     setDownloading(true);
     try {
-      const JSZip = (await import('jszip')).default;
-      const zip = new JSZip();
-
       const token =
         typeof window !== 'undefined'
           ? localStorage.getItem('dineflow_token')
@@ -89,35 +86,40 @@ export default function GenerateQRModal({
         ? { Authorization: `Bearer ${token}` }
         : {};
 
-      await Promise.all(
-        createdQRs.map(async (qr) => {
-          try {
-            const { default: axios } = await import('axios');
-            const res = await axios.get(
-              `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/qr/${qr.id}/image`,
-              { headers },
-            );
-            const { qr_image } = res.data as { qr_image: string };
-            if (qr_image) {
-              zip.file(`${qr.name.replace(/\s+/g, '-')}-qr.png`, qr_image, {
-                base64: true,
-              });
-            }
-          } catch {
-            // skip failed individual QRs
-          }
-        }),
-      );
+      // Download each QR as individual PNG files (no JSZip needed)
+      for (const qr of createdQRs) {
+        try {
+          const res = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/qr/${qr.id}/image`,
+            { headers },
+          );
+          if (!res.ok) continue;
+          const { qr_image } = (await res.json()) as { qr_image: string };
+          if (!qr_image) continue;
 
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'qr-codes.zip';
-      link.click();
-      URL.revokeObjectURL(url);
+          // base64 → blob → anchor download
+          const byteString = atob(qr_image);
+          const bytes = new Uint8Array(byteString.length);
+          for (let i = 0; i < byteString.length; i++) bytes[i] = byteString.charCodeAt(i);
+          const blob = new Blob([bytes], { type: 'image/png' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `${qr.name.replace(/\s+/g, '-')}-qr.png`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+
+          // Small gap so browser doesn't throttle multiple downloads
+          await new Promise((r) => setTimeout(r, 150));
+        } catch {
+          // skip failed individual QRs
+        }
+      }
+      showToast({ type: 'success', title: `${createdQRs.length} QR images downloaded` });
     } catch {
-      showToast({ type: 'error', title: 'Failed to create ZIP' });
+      showToast({ type: 'error', title: 'Failed to download QR codes' });
     } finally {
       setDownloading(false);
     }
@@ -445,7 +447,7 @@ export default function GenerateQRModal({
                   opacity: downloading ? 0.7 : 1,
                 }}
               >
-                {downloading ? 'Zipping…' : '↓ Download ZIP'}
+                {downloading ? 'Downloading…' : '↓ Download All PNGs'}
               </button>
               <button
                 onClick={onClose}
