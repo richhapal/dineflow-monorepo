@@ -1,8 +1,8 @@
 import {
   Controller, Get, Post, Param, Body,
-  Query, UseGuards, Req, Res,
+  Query, UseGuards, Req,
 } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import type { Request } from 'express';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { QrService } from './qr.service';
 import { CreateQRDto, BulkCreateQRDto } from './dto/create-qr.dto';
@@ -46,11 +46,9 @@ export class QrController {
   @Get(':id/image')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  async getImage(@Param('id') id: string, @Res() res: Response) {
-    const qr = await this.qrService.generateQRImage(id);
-    // Return JSON with base64 so the frontend bulk-download can use it
-    const base64Data = qr.replace(/^data:image\/png;base64,/, '');
-    res.json({ qr_image: base64Data, url: qr });
+  getImage(@Param('id') id: string) {
+    // Returns { qr_image: string (pure base64), url: string (scan URL) }
+    return this.qrService.generateQRImage(id);
   }
 
   @Post(':id/disable')

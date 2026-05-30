@@ -2,10 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateQRDto, BulkCreateQRDto } from './dto/create-qr.dto';
 
-// qrcode package — install if not present (it IS in many NestJS setups)
-// If not available, use a placeholder
-let QRCode: any;
-try { QRCode = require('qrcode'); } catch { QRCode = null; }
+import * as QRCodeLib from 'qrcode';
 
 @Injectable()
 export class QrService {
@@ -59,21 +56,26 @@ export class QrService {
     return qr;
   }
 
-  async generateQRImage(idOrSlug: string): Promise<string> {
+  async generateQRImage(idOrSlug: string): Promise<{ qr_image: string; url: string }> {
     // Accept either cuid (id) or slug
     const qr = await this.prisma.qRCode.findFirst({
       where: { OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
     });
     if (!qr) throw new NotFoundException('QR code not found');
 
-    const url = `https://dineflow.app/m/${qr.slug}`;
+    const scanUrl = `https://dineflow.app/m/${qr.slug}`;
 
-    if (!QRCode) {
-      // Return placeholder if qrcode package not installed
-      return `data:image/svg+xml;base64,${Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><text>${url}</text></svg>`).toString('base64')}`;
-    }
+    // Generate PNG as base64 (without data URL prefix)
+    const dataUrl: string = await QRCodeLib.toDataURL(scanUrl, {
+      type: 'image/png',
+      margin: 2,
+      width: 400,
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+    // Strip "data:image/png;base64," prefix — frontend builds it back
+    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
 
-    return QRCode.toDataURL(url, { type: 'image/png', margin: 2 });
+    return { qr_image: base64, url: scanUrl };
   }
 
   async bulkCreate(dto: BulkCreateQRDto, restaurantId: string) {

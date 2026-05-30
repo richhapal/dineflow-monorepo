@@ -162,7 +162,17 @@ export function useUpdateTableStatus() {
 export function useQRCodes(): UseQueryResult<QRCode[]> {
   return useQuery<QRCode[]>({
     queryKey: qrKeys.all,
-    queryFn: () => api.get('/qr').then((r) => r.data),
+    queryFn: () =>
+      api.get('/qr').then((r) =>
+        // API returns `label` — map to `name` for frontend consistency
+        (r.data as any[]).map((q) => ({
+          ...q,
+          name: q.name ?? q.label ?? 'QR Code',
+          total_scans: q.total_scans ?? q.scans ?? 0,
+          last_scanned_at: q.last_scanned_at ?? null,
+          updated_at: q.updated_at ?? q.created_at,
+        })),
+      ),
   });
 }
 
@@ -171,7 +181,7 @@ export function useQRImage(id: string | null) {
     queryKey: qrKeys.image(id ?? ''),
     queryFn: () => api.get(`/qr/${id}/image`).then((r) => r.data),
     enabled: !!id,
-    staleTime: Infinity, // images don't change
+    staleTime: 5 * 60 * 1000, // 5 min cache
   });
 }
 
