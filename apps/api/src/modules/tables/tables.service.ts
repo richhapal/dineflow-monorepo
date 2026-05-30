@@ -17,7 +17,7 @@ export class TablesService {
           select: { id: true, label: true, slug: true, scans: true },
         },
         orders: {
-          where: { status: { notIn: ['CANCELLED', 'COMPLETED', 'PAID'] as any } },
+          where: { status: { notIn: ['CANCELLED', 'COMPLETED'] as any } },
           select: { id: true, status: true, total_amount: true, created_at: true },
           orderBy: { created_at: 'desc' },
           take: 1,
@@ -41,7 +41,7 @@ export class TablesService {
       include: {
         qrCodes: { where: { is_active: true } },
         orders: {
-          where: { status: { notIn: ['CANCELLED', 'COMPLETED', 'PAID'] as any } },
+          where: { status: { notIn: ['CANCELLED', 'COMPLETED'] as any } },
           orderBy: { created_at: 'desc' },
           take: 1,
         },
