@@ -59,11 +59,14 @@ export class QrService {
     return qr;
   }
 
-  async generateQRImage(slug: string): Promise<string> {
-    const qr = await this.prisma.qRCode.findUnique({ where: { slug } });
+  async generateQRImage(idOrSlug: string): Promise<string> {
+    // Accept either cuid (id) or slug
+    const qr = await this.prisma.qRCode.findFirst({
+      where: { OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
+    });
     if (!qr) throw new NotFoundException('QR code not found');
 
-    const url = `https://dineflow.app/m/${slug}`;
+    const url = `https://dineflow.app/m/${qr.slug}`;
 
     if (!QRCode) {
       // Return placeholder if qrcode package not installed
@@ -77,10 +80,35 @@ export class QrService {
     const restaurant = await this.prisma.restaurant.findUnique({ where: { id: restaurantId } });
     if (!restaurant) throw new NotFoundException('Restaurant not found');
 
+    // ── New format: tableIds[] ─────────────────────────────────────────────
+    if (dto.tableIds && dto.tableIds.length > 0) {
+      const tables = await this.prisma.restaurantTable.findMany({
+        where: { id: { in: dto.tableIds }, restaurant_id: restaurantId },
+      });
+
+      const qrs = await this.prisma.$transaction(
+        tables.map((table) => {
+          const slug = `${restaurant.slug}-${this.slugify(table.name)}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          return this.prisma.qRCode.create({
+            data: {
+              restaurant_id: restaurantId,
+              table_id: table.id,
+              label: table.name,
+              slug,
+            },
+          });
+        }),
+      );
+      return qrs;
+    }
+
+    // ── Legacy format: count + prefix ─────────────────────────────────────
+    const count = dto.count ?? 1;
+    const prefix = dto.prefix ?? 'Table';
     const qrs = await this.prisma.$transaction(
-      Array.from({ length: dto.count }, (_, i) => {
-        const label = `${dto.prefix} ${i + 1}`;
-        const slug = `${restaurant.slug}-${this.slugify(dto.prefix)}-${i + 1}-${Date.now() + i}`;
+      Array.from({ length: count }, (_, i) => {
+        const label = `${prefix} ${i + 1}`;
+        const slug = `${restaurant.slug}-${this.slugify(prefix)}-${i + 1}-${Date.now() + i}`;
         return this.prisma.qRCode.create({
           data: { restaurant_id: restaurantId, label, slug },
         });

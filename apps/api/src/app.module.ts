@@ -14,6 +14,7 @@ import { QrModule } from './modules/qr/qr.module';
 import { UploadModule } from './modules/upload/upload.module';
 import { WebsocketModule } from './modules/websocket/websocket.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { TablesModule } from './modules/tables/tables.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -50,6 +51,7 @@ import { PrismaModule } from './prisma/prisma.module';
     UploadModule,
     WebsocketModule,
     NotificationsModule,
+    TablesModule,
   ],
 })
 export class AppModule {}

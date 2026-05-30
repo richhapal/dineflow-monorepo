@@ -48,9 +48,9 @@ export class QrController {
   @ApiBearerAuth()
   async getImage(@Param('id') id: string, @Res() res: Response) {
     const qr = await this.qrService.generateQRImage(id);
-    res.setHeader('Content-Type', 'image/png');
+    // Return JSON with base64 so the frontend bulk-download can use it
     const base64Data = qr.replace(/^data:image\/png;base64,/, '');
-    res.send(Buffer.from(base64Data, 'base64'));
+    res.json({ qr_image: base64Data, url: qr });
   }
 
   @Post(':id/disable')

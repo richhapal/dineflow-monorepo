@@ -69,6 +69,7 @@ export enum TableStatus {
   RESERVED = 'RESERVED',
   BILL_REQUESTED = 'BILL_REQUESTED',
   CLEANING = 'CLEANING',
+  MAINTENANCE = 'MAINTENANCE',
 }
 
 // ─── Restaurant ───────────────────────────────────────────────────────────────

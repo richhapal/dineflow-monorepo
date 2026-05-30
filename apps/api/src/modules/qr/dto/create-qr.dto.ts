@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, Min } from 'class-validator';
+import { IsString, IsOptional, IsInt, Min, IsArray } from 'class-validator';
 
 export class CreateQRDto {
   @IsString() label!: string;
@@ -8,6 +8,9 @@ export class CreateQRDto {
 }
 
 export class BulkCreateQRDto {
-  @IsInt() @Min(1) count!: number;
-  @IsString() prefix!: string;
+  // New format: list of table IDs (from the Tables & QR dashboard)
+  @IsOptional() @IsArray() @IsString({ each: true }) tableIds?: string[];
+  // Legacy format (kept for backward compat)
+  @IsOptional() @IsInt() @Min(1) count?: number;
+  @IsOptional() @IsString() prefix?: string;
 }
