@@ -167,9 +167,17 @@ export class TablesService {
 
   async deleteTable(id: string, restaurantId: string) {
     await this.assertOwnership(id, restaurantId);
+    const table = await this.prisma.restaurantTable.findUnique({ where: { id } });
+    if (!table) throw new NotFoundException('Table not found');
+
+    // Append timestamp to free the unique (restaurant_id, name) constraint
+    // so the same name can be reused after deletion
     await this.prisma.restaurantTable.update({
       where: { id },
-      data: { is_active: false },
+      data: {
+        is_active: false,
+        name: `${table.name}__deleted_${Date.now()}`,
+      },
     });
     return { deleted: true };
   }
@@ -189,7 +197,7 @@ export class TablesService {
 
   private async assertOwnership(id: string, restaurantId: string) {
     const table = await this.prisma.restaurantTable.findFirst({
-      where: { id, restaurant_id: restaurantId },
+      where: { id, restaurant_id: restaurantId, is_active: true },
     });
     if (!table) throw new NotFoundException('Table not found');
   }
