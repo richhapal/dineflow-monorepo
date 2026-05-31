@@ -78,7 +78,8 @@ interface OrderStatus {
     quantity: number;
     unit_price: number;
     notes: string | null;
-    menuItem: { name: string };
+    item_name: string;
+    menuItem?: { name: string } | null;
   }>;
 }
 
@@ -1012,7 +1013,7 @@ function OrderStatusScreen({
             }}
           >
             <span style={{ fontSize: 14, color: 'var(--ink)' }}>
-              {item.menuItem.name}
+              {item.item_name || item.menuItem?.name}
               <span style={{ color: 'var(--ink4)' }}> ×{item.quantity}</span>
             </span>
             <span style={{ fontFamily: 'monospace', fontSize: 13, color: 'var(--ink3)' }}>

@@ -130,7 +130,12 @@ export class OrdersService {
           },
         },
         include: {
-          items: { include: { addons: true } },
+          items: {
+            include: {
+              addons: true,
+              menuItem: { select: { name: true } },
+            },
+          },
           statusHistory: true,
         },
       });
@@ -364,6 +369,7 @@ export class OrdersService {
             quantity: true,
             unit_price: true,
             notes: true,
+            item_name: true,
             menuItem: { select: { name: true } },
           },
         },
