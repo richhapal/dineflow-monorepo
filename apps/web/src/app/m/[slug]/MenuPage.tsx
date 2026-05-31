@@ -62,9 +62,8 @@ interface MenuData {
     name: string;
     slug: string;
     logo_public_id: string | null;
-    is_open: boolean;
   };
-  availability: { is_open: boolean; message?: string };
+  availability: { state: string; message?: string; opens_at?: string; closes_at?: string };
   categories: Category[];
   collections: unknown[];
 }
@@ -1198,7 +1197,7 @@ export default function MenuPage({
 
   const { restaurant, availability, categories } = menuData;
   const isOrderingEnabled = qrData.restaurant.is_ordering_enabled;
-  const isRestaurantOpen = availability.is_open;
+  const isRestaurantOpen = availability.state === 'OPEN';
   const tableName = qrData.table?.name;
 
   // Intersection Observer to track active category while scrolling
@@ -1293,8 +1292,8 @@ export default function MenuPage({
                 borderRadius: 20,
                 fontSize: 12,
                 fontWeight: 600,
-                background: availability.is_open ? 'var(--green-bg)' : 'var(--red-bg)',
-                color: availability.is_open ? 'var(--green)' : 'var(--red)',
+                background: isRestaurantOpen ? 'var(--green-bg)' : 'var(--red-bg)',
+                color: isRestaurantOpen ? 'var(--green)' : 'var(--red)',
               }}
             >
               <span
@@ -1302,11 +1301,11 @@ export default function MenuPage({
                   width: 7,
                   height: 7,
                   borderRadius: '50%',
-                  background: availability.is_open ? 'var(--green)' : 'var(--red)',
+                  background: isRestaurantOpen ? 'var(--green)' : 'var(--red)',
                   display: 'inline-block',
                 }}
               />
-              {availability.is_open ? 'Open' : 'Closed'}
+              {isRestaurantOpen ? 'Open' : availability.message || 'Closed'}
             </span>
           </div>
         </div>

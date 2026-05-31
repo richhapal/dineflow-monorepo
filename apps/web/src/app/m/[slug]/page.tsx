@@ -25,9 +25,8 @@ interface MenuData {
     name: string;
     slug: string;
     logo_public_id: string | null;
-    is_open: boolean;
   };
-  availability: { is_open: boolean; message?: string };
+  availability: { state: string; message?: string; opens_at?: string; closes_at?: string };
   categories: Array<{
     id: string;
     name: string;
