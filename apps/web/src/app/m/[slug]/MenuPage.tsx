@@ -1063,6 +1063,116 @@ function OrderStatusScreen({
   );
 }
 
+// ─── Closed Order Warning Dialog ─────────────────────────────────────────────
+
+function ClosedOrderWarning({
+  onPlaceAnyway,
+  onCancel,
+}: {
+  onPlaceAnyway: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <>
+      <div
+        onClick={onCancel}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.45)',
+          zIndex: 500,
+        }}
+      />
+      <div
+        style={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          background: '#fff',
+          borderRadius: '16px 16px 0 0',
+          padding: '24px 20px 36px',
+          zIndex: 501,
+          maxWidth: 480,
+          margin: '0 auto',
+        }}
+      >
+        {/* Warning icon */}
+        <div
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: '50%',
+            background: '#FEF3C7',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 24,
+            margin: '0 auto 16px',
+          }}
+        >
+          ⚠️
+        </div>
+
+        <h3
+          style={{
+            fontFamily: 'Instrument Serif',
+            fontSize: 20,
+            color: 'var(--ink)',
+            textAlign: 'center',
+            marginBottom: 10,
+          }}
+        >
+          Restaurant is currently closed
+        </h3>
+
+        <p
+          style={{
+            fontSize: 14,
+            color: 'var(--ink4)',
+            textAlign: 'center',
+            lineHeight: 1.55,
+            marginBottom: 24,
+          }}
+        >
+          Your order will be sent when they reopen.
+        </p>
+
+        <button
+          onClick={onPlaceAnyway}
+          style={{
+            width: '100%',
+            padding: '13px',
+            borderRadius: 10,
+            background: '#B45309',
+            color: '#fff',
+            fontSize: 15,
+            fontWeight: 600,
+            marginBottom: 10,
+          }}
+        >
+          Place order anyway
+        </button>
+
+        <button
+          onClick={onCancel}
+          style={{
+            width: '100%',
+            padding: '13px',
+            borderRadius: 10,
+            background: 'var(--paper2)',
+            color: 'var(--ink3)',
+            fontSize: 15,
+            fontWeight: 600,
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </>
+  );
+}
+
 // ─── Main MenuPage ───────────────────────────────────────────────────────────
 
 export default function MenuPage({
@@ -1080,6 +1190,7 @@ export default function MenuPage({
   );
   const [showCart, setShowCart] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [showClosedWarning, setShowClosedWarning] = useState(false);
   const [placedOrder, setPlacedOrder] = useState<OrderStatus | null>(null);
   const categoryRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const navRef = useRef<HTMLDivElement>(null);
@@ -1087,6 +1198,7 @@ export default function MenuPage({
 
   const { restaurant, availability, categories } = menuData;
   const isOrderingEnabled = qrData.restaurant.is_ordering_enabled;
+  const isRestaurantOpen = availability.is_open;
   const tableName = qrData.table?.name;
 
   // Intersection Observer to track active category while scrolling
@@ -1341,8 +1453,23 @@ export default function MenuPage({
           onClose={() => setShowCart(false)}
           onCheckout={() => {
             setShowCart(false);
+            if (!isRestaurantOpen) {
+              setShowClosedWarning(true);
+            } else {
+              setShowCheckout(true);
+            }
+          }}
+        />
+      )}
+
+      {/* ── Closed Warning ── */}
+      {showClosedWarning && (
+        <ClosedOrderWarning
+          onPlaceAnyway={() => {
+            setShowClosedWarning(false);
             setShowCheckout(true);
           }}
+          onCancel={() => setShowClosedWarning(false)}
         />
       )}
 
