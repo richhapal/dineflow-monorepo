@@ -25,3 +25,11 @@ export class CreateOrderDto {
   @IsUUID() idempotency_key!: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => CreateOrderItemDto) items!: CreateOrderItemDto[];
 }
+
+export class CreatePublicOrderDto {
+  @IsString() qr_slug!: string;
+  @IsOptional() @IsString() customer_name?: string;
+  @IsOptional() @IsString() customer_lang?: string;
+  @IsUUID() idempotency_key!: string;
+  @IsArray() @ValidateNested({ each: true }) @Type(() => CreateOrderItemDto) items!: CreateOrderItemDto[];
+}

@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { OrdersService } from './orders.service';
-import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateOrderDto, CreatePublicOrderDto } from './dto/create-order.dto';
 import { UpdateStatusDto, ApplyDiscountDto } from './dto/update-status.dto';
 import { JwtGuard } from '../../common/guards/jwt.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -17,6 +17,16 @@ export class OrdersController {
   @Get('customer/:sessionToken')
   getBySession(@Param('sessionToken') token: string) {
     return this.ordersService.getBySessionToken(token);
+  }
+
+  @Post('public')
+  createPublic(@Body() dto: CreatePublicOrderDto) {
+    return this.ordersService.createPublic(dto);
+  }
+
+  @Get('public/:id')
+  getPublicOrder(@Param('id') id: string) {
+    return this.ordersService.getPublicOrderStatus(id);
   }
 
   @Post()

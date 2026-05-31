@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
-import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateOrderDto, CreatePublicOrderDto } from './dto/create-order.dto';
 import { UpdateStatusDto, ApplyDiscountDto } from './dto/update-status.dto';
 import { calculateGST } from '@dineflow/utils';
 
@@ -331,6 +331,46 @@ export class OrdersService {
         },
       });
     });
+  }
+
+  async createPublic(dto: CreatePublicOrderDto) {
+    const qr = await this.prisma.qRCode.findUnique({
+      where: { slug: dto.qr_slug },
+      include: { restaurant: true },
+    });
+    if (!qr || !qr.is_active) throw new NotFoundException('QR code not found');
+
+    return this.create({
+      table_id: qr.table_id ?? undefined,
+      order_type: 'DINE_IN' as any,
+      customer_name: dto.customer_name,
+      customer_lang: dto.customer_lang || 'en',
+      idempotency_key: dto.idempotency_key,
+      items: dto.items,
+    }, qr.restaurant_id);
+  }
+
+  async getPublicOrderStatus(id: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        total_amount: true,
+        created_at: true,
+        items: {
+          select: {
+            id: true,
+            quantity: true,
+            unit_price: true,
+            notes: true,
+            menuItem: { select: { name: true } },
+          },
+        },
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    return order;
   }
 
   async getBySessionToken(sessionToken: string) {
