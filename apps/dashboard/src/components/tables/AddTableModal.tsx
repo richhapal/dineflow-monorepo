@@ -75,7 +75,7 @@ export default function AddTableModal({
     setNameError('');
     setLoading(true);
 
-    const payload = {
+    const createPayload = {
       name,
       section: resolvedSection || undefined,
       capacity,
@@ -83,15 +83,23 @@ export default function AddTableModal({
       generate_qr: generateQR && !bulkMode,
     };
 
+    // edit payload must NOT include generate_qr — API rejects unknown fields
+    const editPayload = {
+      name,
+      section: resolvedSection || undefined,
+      capacity,
+      table_type: tableType,
+    };
+
     try {
       if (isEdit && editTable) {
-        await updateTable.mutateAsync({ id: editTable.id, payload });
+        await updateTable.mutateAsync({ id: editTable.id, payload: editPayload });
         showToast({ type: 'success', title: `Table ${name} updated` });
       } else if (bulkMode) {
         // Bulk create
         const promises = Array.from({ length: bulkCount }, (_, i) =>
           createTable.mutateAsync({
-            ...payload,
+            ...createPayload,
             name: `${name}-${i + 1}`,
             generate_qr: generateQR,
           }),
@@ -102,7 +110,7 @@ export default function AddTableModal({
           title: `${bulkCount} tables created`,
         });
       } else {
-        await createTable.mutateAsync(payload);
+        await createTable.mutateAsync(createPayload);
         showToast({ type: 'success', title: `Table ${name} created` });
       }
       onClose();

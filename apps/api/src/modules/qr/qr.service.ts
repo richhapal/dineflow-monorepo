@@ -1,12 +1,19 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateQRDto, BulkCreateQRDto } from './dto/create-qr.dto';
-
 import * as QRCodeLib from 'qrcode';
 
 @Injectable()
 export class QrService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly menuBaseUrl: string;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {
+    this.menuBaseUrl = this.config.get<string>('MENU_BASE_URL') || 'http://localhost:3001';
+  }
 
   private slugify(str: string) {
     return str.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -63,7 +70,7 @@ export class QrService {
     });
     if (!qr) throw new NotFoundException('QR code not found');
 
-    const scanUrl = `https://dineflow.app/m/${qr.slug}`;
+    const scanUrl = `${this.menuBaseUrl}/m/${qr.slug}`;
 
     // Generate PNG as base64 (without data URL prefix)
     const dataUrl: string = await QRCodeLib.toDataURL(scanUrl, {
