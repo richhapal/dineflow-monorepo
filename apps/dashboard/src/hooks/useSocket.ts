@@ -12,9 +12,12 @@ export function useSocket(restaurantId: string, role: 'dashboard' | 'kitchen' | 
   useEffect(() => {
     if (!restaurantId) return;
 
-    const socket = io(process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:4000', {
-      path: '/ws',
+    // Gateway uses namespace '/ws' — connect to the namespace URL directly.
+    // Do NOT use `path:'/ws'` (that changes the HTTP transport path, causing 404s).
+    const base = process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:4000';
+    const socket = io(`${base}/ws`, {
       auth: { token: localStorage.getItem('dineflow_token') },
+      transports: ['websocket', 'polling'],
     });
 
     socketRef.current = socket;

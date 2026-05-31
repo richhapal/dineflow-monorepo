@@ -154,18 +154,13 @@ export default function TablesPage() {
   useEffect(() => {
     if (!restaurant?.id) return;
 
-    const socket = io(
-      process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:4000',
-      {
-        path: '/ws',
-        auth: {
-          token:
-            typeof window !== 'undefined'
-              ? localStorage.getItem('dineflow_token')
-              : null,
-        },
+    const base = process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:4000';
+    const socket = io(`${base}/ws`, {
+      auth: {
+        token: typeof window !== 'undefined' ? localStorage.getItem('dineflow_token') : null,
       },
-    );
+      transports: ['websocket', 'polling'],
+    });
 
     socketRef.current = socket;
 

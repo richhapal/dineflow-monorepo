@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
+import { io } from 'socket.io-client';
 import { formatINR } from '@dineflow/utils';
 import { useCart } from '@/lib/cart';
 import { api } from '@/lib/api';
@@ -907,22 +908,40 @@ function OrderStatusScreen({
 }) {
   const [order, setOrder] = useState<OrderStatus>(initialOrder);
 
-  const pollStatus = useCallback(async () => {
-    try {
-      const res = await api.get<OrderStatus>(`/orders/public/${initialOrder.id}`);
-      setOrder(res.data);
-    } catch {
-      // ignore poll errors
-    }
-  }, [initialOrder.id]);
-
+  // ── Real-time order status via Socket.io ─────────────────────────────────
   useEffect(() => {
     const terminal = ['COMPLETED', 'CANCELLED', 'SERVED'];
     if (terminal.includes(order.status)) return;
 
-    const interval = setInterval(pollStatus, 10000);
-    return () => clearInterval(interval);
-  }, [order.status, pollStatus]);
+    const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+    const socket = io(`${base}/ws`, {
+      transports: ['websocket', 'polling'],
+    });
+
+    socket.on('connect', () => {
+      // Join the order-specific room to receive status updates
+      socket.emit('join:order', { order_id: initialOrder.id });
+    });
+
+    socket.on('order:status', (data: { order_id: string; status: string }) => {
+      if (data.order_id === initialOrder.id) {
+        setOrder((prev) => ({ ...prev, status: data.status }));
+      }
+    });
+
+    // Fallback poll every 15s in case socket misses an event
+    const fallback = setInterval(async () => {
+      try {
+        const res = await api.get<OrderStatus>(`/orders/public/${initialOrder.id}`);
+        setOrder(res.data);
+      } catch { /* ignore */ }
+    }, 15000);
+
+    return () => {
+      socket.disconnect();
+      clearInterval(fallback);
+    };
+  }, [initialOrder.id, order.status]);
 
   const statusInfo = STATUS_CONFIG[order.status] || STATUS_CONFIG['PENDING'];
 
