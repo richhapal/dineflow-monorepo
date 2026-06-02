@@ -157,9 +157,17 @@ export class TablesService {
 
   async updateStatus(id: string, dto: UpdateTableStatusDto, restaurantId: string) {
     await this.assertOwnership(id, restaurantId);
+
+    const occupiedSinceData =
+      dto.status === 'OCCUPIED'
+        ? { occupied_since: new Date() }           // transitioning in → stamp now
+        : dto.status !== 'OCCUPIED'
+        ? { occupied_since: null }                 // leaving occupied → clear
+        : {};
+
     return this.prisma.restaurantTable.update({
       where: { id },
-      data: { status: dto.status as any },
+      data: { status: dto.status as any, ...occupiedSinceData },
     });
   }
 

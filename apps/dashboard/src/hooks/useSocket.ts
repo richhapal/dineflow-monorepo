@@ -1,13 +1,40 @@
 'use client';
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useDashboardStore } from '../lib/store';
 import { WEBSOCKET_EVENTS } from '@dineflow/config';
 import { Order, OrderStatus } from '@dineflow/types';
 
-export function useSocket(restaurantId: string, role: 'dashboard' | 'kitchen' | 'waiter'): React.MutableRefObject<Socket | null> {
+export interface QueuedOrderItem {
+  orderId: string;
+  restaurantId: string;
+  sessionId: string;
+  customerName: string;
+  seatIdentifier: string;
+  itemCount: number;
+  totalAmount: number;
+  queuePosition: number;
+  placedAt: string;
+}
+
+export interface RestaurantStatusPayload {
+  paused: boolean;
+  reason: string | null;
+  updated_at: string;
+}
+
+export function useSocket(
+  restaurantId: string,
+  role: 'dashboard' | 'kitchen' | 'waiter',
+): {
+  socketRef: React.MutableRefObject<Socket | null>;
+  queue: QueuedOrderItem[];
+  restaurantStatus: RestaurantStatusPayload | null;
+} {
   const socketRef = useRef<Socket | null>(null);
   const { addOrder, updateOrderStatus } = useDashboardStore();
+  const [queue, setQueue] = useState<QueuedOrderItem[]>([]);
+  const [restaurantStatus, setRestaurantStatus] = useState<RestaurantStatusPayload | null>(null);
 
   useEffect(() => {
     if (!restaurantId) return;
@@ -36,10 +63,18 @@ export function useSocket(restaurantId: string, role: 'dashboard' | 'kitchen' | 
       updateOrderStatus(order_id, status);
     });
 
+    socket.on('queue:update', ({ queue: updatedQueue }: { queue: QueuedOrderItem[] }) => {
+      setQueue(updatedQueue);
+    });
+
+    socket.on(WEBSOCKET_EVENTS.RESTAURANT_STATUS, (payload: RestaurantStatusPayload) => {
+      setRestaurantStatus(payload);
+    });
+
     socket.on('disconnect', () => console.log('[WS] Disconnected'));
 
     return () => { socket.disconnect(); };
   }, [restaurantId, role]);
 
-  return socketRef;
+  return { socketRef, queue, restaurantStatus };
 }

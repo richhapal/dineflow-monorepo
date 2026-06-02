@@ -252,7 +252,11 @@ model Restaurant {
   is_ordering_enabled  Boolean            @default(true)
   is_open              Boolean            @default(true)
   is_ordering_paused   Boolean            @default(false)
+  ordering_pause_reason String?           // shown to customers when paused
+  ordering_pause_until DateTime?          // auto-resume at this time
+  single_qr_slug       String?            @unique // shared QR slug (optional)
   auto_accept_orders   Boolean            @default(false)
+  order_timeout_minutes Int               @default(10) // pending orders auto-cancel after this many minutes
   whatsapp_bill        Boolean            @default(true)
   sms_bill             Boolean            @default(false)
   ordering_mode        OrderingMode       @default(SELF)
@@ -439,6 +443,7 @@ model RestaurantTable {
   capacity      Int         @default(4)
   table_type    TableType   @default(INDOOR)
   status        TableStatus @default(AVAILABLE)
+  occupied_since DateTime?  // set when first order confirmed; cleared when table goes CLEANING
   notes         String?
   position_x    Float?      // for floor-plan drag UI
   position_y    Float?
@@ -831,6 +836,15 @@ model Order {
   covers          Int         @default(1)
   notes           String?
 
+  // ── Queue info ────────────────────────────────────────────────
+  order_session_id String?              // human-readable "ORD-4821"
+  queue_position  Int?                 // position in queue when placed
+  seat_identifier String?              // "Table 7", "Bar Seat 2" — customer-entered
+  decline_reason  String?              // set when owner declines or auto-cancel fires
+
+  // ── Waiter modification ───────────────────────────────────────
+  waiter_note     String?              // message waiter sends to customer when modifying
+
   // ── Session link ─────────────────────────────────────────────
   session_id      String?
 
@@ -886,9 +900,10 @@ model OrderItem {
   unit_price   Decimal         @db.Decimal(10,2) // SNAPSHOT
   total_price  Decimal         @db.Decimal(10,2)
   item_name    String                             // SNAPSHOT
-  notes        String?         // "no onions", "extra spicy"
-  is_cancelled Boolean         @default(false)
-  created_at   DateTime        @default(now())
+  notes              String?   // "no onions", "extra spicy"
+  is_cancelled       Boolean   @default(false)
+  unavailable_reason String?   // set by waiter when marking item as unavailable
+  created_at         DateTime  @default(now())
 
   order        Order           @relation(fields: [order_id], references: [id], onDelete: Cascade)
   menuItem     MenuItem        @relation(fields: [menu_item_id], references: [id])

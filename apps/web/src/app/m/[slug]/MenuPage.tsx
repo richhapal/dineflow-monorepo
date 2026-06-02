@@ -6,6 +6,8 @@ import { io } from 'socket.io-client';
 import { formatINR } from '@dineflow/utils';
 import { useCart } from '@/lib/cart';
 import { api } from '@/lib/api';
+import { useOrderingStatus } from '@/hooks/useOrderingStatus';
+import OrderingPausedScreen from '@/components/OrderingPausedScreen';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -73,6 +75,7 @@ interface OrderStatus {
   status: string;
   total_amount: number;
   created_at: string;
+  decline_reason?: string | null;
   items: Array<{
     id: string;
     quantity: number;
@@ -695,15 +698,21 @@ function CartDrawer({
 
 function CheckoutSheet({
   qrSlug,
+  isTakeaway,
   onClose,
   onSuccess,
+  onOrderingPaused,
 }: {
   qrSlug: string;
+  isTakeaway: boolean;
   onClose: () => void;
   onSuccess: (order: OrderStatus) => void;
+  onOrderingPaused?: (reason?: string) => void;
 }) {
   const { items, total, clear } = useCart();
   const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [seatIdentifier, setSeatIdentifier] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -712,22 +721,43 @@ function CheckoutSheet({
     setError(null);
     try {
       const idempotencyKey = crypto.randomUUID();
-      const payload = {
-        qr_slug: qrSlug,
-        customer_name: customerName.trim() || undefined,
-        idempotency_key: idempotencyKey,
-        items: items.map((i) => ({
-          menu_item_id: i.menuItemId,
-          variant_id: i.variantId,
-          quantity: i.quantity,
-        })),
-      };
+      const orderItems = items.map((i) => ({
+        menu_item_id: i.menuItemId,
+        variant_id: i.variantId,
+        quantity: i.quantity,
+      }));
 
-      const res = await api.post('/orders/public', payload);
+      let res;
+      if (isTakeaway) {
+        // Outside / takeaway order — uses single-qr endpoint with queue + session
+        const payload = {
+          qr_slug: qrSlug,
+          customer_name: customerName.trim() || 'Guest',
+          customer_phone: customerPhone.trim() || undefined,
+          seat_identifier: seatIdentifier.trim() || undefined,
+          idempotency_key: idempotencyKey,
+          items: orderItems,
+        };
+        res = await api.post('/orders/single-qr', payload);
+      } else {
+        // Table QR — dine-in, direct order
+        const payload = {
+          qr_slug: qrSlug,
+          customer_name: customerName.trim() || 'Guest',
+          idempotency_key: idempotencyKey,
+          items: orderItems,
+        };
+        res = await api.post('/orders/public', payload);
+      }
+
       clear();
       onSuccess(res.data);
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { message?: string } }; message?: string };
+      const axiosErr = err as { response?: { data?: { error?: string; message?: string } }; message?: string };
+      if (axiosErr.response?.data?.error === 'ORDERING_PAUSED') {
+        onOrderingPaused?.(axiosErr.response?.data?.message);
+        return;
+      }
       setError(axiosErr.response?.data?.message || axiosErr.message || 'Failed to place order');
     } finally {
       setLoading(false);
@@ -771,7 +801,19 @@ function CheckoutSheet({
             alignItems: 'center',
           }}
         >
-          <h2 style={{ fontFamily: 'Instrument Serif', fontSize: 20, color: 'var(--ink)' }}>Confirm order</h2>
+          <div>
+            <h2 style={{ fontFamily: 'Instrument Serif', fontSize: 20, color: 'var(--ink)' }}>Confirm order</h2>
+            {isTakeaway && (
+              <span style={{
+                display: 'inline-block', marginTop: 3,
+                fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 100,
+                background: '#FFF7ED', color: '#C2410C',
+                fontFamily: 'sans-serif', letterSpacing: '.04em',
+              }}>
+                🛍 Outside / Takeaway
+              </span>
+            )}
+          </div>
           <button
             onClick={onClose}
             style={{
@@ -792,9 +834,9 @@ function CheckoutSheet({
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
           {/* Name input */}
-          <div style={{ marginBottom: 20 }}>
+          <div style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--ink4)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Your name (optional)
+              Your name
             </label>
             <input
               type="text"
@@ -812,6 +854,57 @@ function CheckoutSheet({
               }}
             />
           </div>
+
+          {/* Phone number — only for outside/takeaway */}
+          {isTakeaway && (
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--ink4)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Phone number (optional)
+              </label>
+              <input
+                type="tel"
+                placeholder="e.g. 9876543210"
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px 14px',
+                  borderRadius: 8,
+                  border: '1.5px solid var(--border)',
+                  fontSize: 15,
+                  color: 'var(--ink)',
+                  outline: 'none',
+                }}
+              />
+            </div>
+          )}
+
+          {/* Location note — only for outside/takeaway */}
+          {isTakeaway && (
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--ink4)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Your location / note (optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Car park, Gate 2, Blue scooter outside"
+                value={seatIdentifier}
+                onChange={(e) => setSeatIdentifier(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px 14px',
+                  borderRadius: 8,
+                  border: '1.5px solid var(--border)',
+                  fontSize: 15,
+                  color: 'var(--ink)',
+                  outline: 'none',
+                }}
+              />
+            </div>
+          )}
+
+          {/* Spacer for dine-in (no extra fields) */}
+          {!isTakeaway && <div style={{ marginBottom: 6 }} />}
 
           {/* Order summary */}
           <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
@@ -899,6 +992,14 @@ const STATUS_CONFIG: Record<string, { icon: string; label: string; color: string
   CANCELLED: { icon: '✕', label: 'Cancelled', color: 'var(--red)', bg: 'var(--red-bg)' },
 };
 
+type WaiterModification = {
+  item_id: string;
+  item_name: string;
+  cancelled?: boolean;
+  new_quantity?: number;
+  reason?: string;
+};
+
 function OrderStatusScreen({
   order: initialOrder,
   onAddMore,
@@ -907,6 +1008,10 @@ function OrderStatusScreen({
   onAddMore: () => void;
 }) {
   const [order, setOrder] = useState<OrderStatus>(initialOrder);
+  const [modification, setModification] = useState<{
+    modifications: WaiterModification[];
+    waiter_note: string | null;
+  } | null>(null);
 
   // ── Real-time order status via Socket.io ─────────────────────────────────
   useEffect(() => {
@@ -919,13 +1024,32 @@ function OrderStatusScreen({
     });
 
     socket.on('connect', () => {
-      // Join the order-specific room to receive status updates
       socket.emit('join:order', { order_id: initialOrder.id });
     });
 
     socket.on('order:status', (data: { order_id: string; status: string }) => {
       if (data.order_id === initialOrder.id) {
         setOrder((prev) => ({ ...prev, status: data.status }));
+      }
+    });
+
+    // Decline / auto-cancel — carries the reason
+    socket.on('order:declined', (data: { order_id: string; reason: string }) => {
+      if (data.order_id === initialOrder.id) {
+        setOrder((prev) => ({ ...prev, status: 'CANCELLED', decline_reason: data.reason }));
+      }
+    });
+
+    // Waiter modified the order before confirming
+    socket.on('order:modified', (data: {
+      order_id: string;
+      modifications: WaiterModification[];
+      waiter_note: string | null;
+      order: OrderStatus | null;
+    }) => {
+      if (data.order_id === initialOrder.id) {
+        if (data.order) setOrder(data.order);
+        setModification({ modifications: data.modifications, waiter_note: data.waiter_note });
       }
     });
 
@@ -958,6 +1082,82 @@ function OrderStatusScreen({
         margin: '0 auto',
       }}
     >
+      {/* ── Waiter modification notification ── */}
+      {modification && modification.modifications.length > 0 && (
+        <div style={{
+          width: '100%', marginBottom: 18,
+          background: '#FFFBEB', border: '1.5px solid #F59E0B',
+          borderRadius: 14, padding: '16px',
+          animation: 'slideIn .3s ease',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 22 }}>⚠️</span>
+              <div>
+                <p style={{ fontFamily: 'system-ui, sans-serif', fontWeight: 700, fontSize: 15, color: '#92400E' }}>
+                  Restaurant modified your order
+                </p>
+                <p style={{ fontFamily: 'system-ui, sans-serif', fontSize: 12, color: '#B45309', marginTop: 1 }}>
+                  Some items were changed before preparation
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setModification(null)}
+              style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#92400E', lineHeight: 1 }}
+            >×</button>
+          </div>
+
+          {/* Changed items */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: modification.waiter_note ? 12 : 0 }}>
+            {modification.modifications.map((m, i) => (
+              <div key={i} style={{
+                background: '#FEF3C7', borderRadius: 8, padding: '8px 12px',
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                {m.cancelled ? (
+                  <>
+                    <span style={{ fontSize: 16 }}>✕</span>
+                    <div>
+                      <p style={{ fontFamily: 'system-ui, sans-serif', fontSize: 13, fontWeight: 600, color: '#92400E', textDecoration: 'line-through' }}>
+                        {m.item_name}
+                      </p>
+                      {m.reason && (
+                        <p style={{ fontFamily: 'system-ui, sans-serif', fontSize: 12, color: '#B45309', marginTop: 2 }}>
+                          {m.reason}
+                        </p>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ fontSize: 16 }}>✏️</span>
+                    <p style={{ fontFamily: 'system-ui, sans-serif', fontSize: 13, fontWeight: 600, color: '#92400E' }}>
+                      {m.item_name} — quantity changed to {m.new_quantity}
+                    </p>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Waiter message */}
+          {modification.waiter_note && (
+            <div style={{
+              marginTop: 10, background: '#fff', borderRadius: 8, padding: '10px 12px',
+              border: '1px solid #FDE68A',
+            }}>
+              <p style={{ fontFamily: 'system-ui, sans-serif', fontSize: 12, color: '#92400E', fontWeight: 600, marginBottom: 4 }}>
+                💬 Message from restaurant:
+              </p>
+              <p style={{ fontFamily: 'system-ui, sans-serif', fontSize: 13, color: '#78350F' }}>
+                {modification.waiter_note}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Status banner */}
       <div
         style={{
@@ -984,6 +1184,21 @@ function OrderStatusScreen({
         <p style={{ fontSize: 12, color: 'var(--ink4)', fontFamily: 'monospace' }}>
           Order #{order.id.slice(-8).toUpperCase()}
         </p>
+
+        {/* Decline / auto-cancel reason */}
+        {order.status === 'CANCELLED' && order.decline_reason && (
+          <div style={{
+            marginTop: 12, padding: '10px 14px', borderRadius: 8,
+            background: 'rgba(255,255,255,0.6)', border: '1px solid rgba(220,38,38,.2)',
+          }}>
+            <p style={{ fontSize: 13, color: 'var(--red)', fontFamily: "'Geist', sans-serif", fontWeight: 500 }}>
+              Reason
+            </p>
+            <p style={{ fontSize: 13, color: 'var(--ink)', fontFamily: "'Geist', sans-serif", marginTop: 2 }}>
+              {order.decline_reason}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Items */}
@@ -1200,6 +1415,14 @@ export default function MenuPage({
   const isOrderingEnabled = qrData.restaurant.is_ordering_enabled;
   const isRestaurantOpen = availability.state === 'OPEN';
   const tableName = qrData.table?.name;
+  // Outside/takeaway QR has no table assigned; use single-qr endpoint with TAKEAWAY type
+  const isTakeaway = !qrData.table;
+
+  // Live ordering pause status via WebSocket
+  const orderingStatus = useOrderingStatus(restaurant.slug, qrData.restaurant.id);
+  // Local override: set when checkout returns ORDERING_PAUSED (WebSocket will sync shortly after)
+  const [localPausedReason, setLocalPausedReason] = useState<string | null>(null);
+  const isPaused = orderingStatus.paused || localPausedReason !== null;
 
   // Intersection Observer to track active category while scrolling
   useEffect(() => {
@@ -1250,6 +1473,17 @@ export default function MenuPage({
     );
   }
 
+  // Show ordering paused screen (real-time via WebSocket)
+  if (isPaused) {
+    return (
+      <OrderingPausedScreen
+        reason={localPausedReason || orderingStatus.reason}
+        pauseUntil={orderingStatus.pause_until}
+        restaurantName={restaurant.name}
+      />
+    );
+  }
+
   const cartCount = count();
   const cartTotal = total();
 
@@ -1279,8 +1513,16 @@ export default function MenuPage({
             >
               {restaurant.name}
             </h1>
-            {tableName && (
+            {tableName ? (
               <p style={{ fontSize: 13, color: 'var(--ink4)', marginTop: 2 }}>Table {tableName}</p>
+            ) : (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 3,
+                fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 100,
+                background: '#FFF7ED', color: '#C2410C',
+              }}>
+                🛍 Outside Order
+              </span>
             )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
@@ -1477,10 +1719,15 @@ export default function MenuPage({
       {showCheckout && (
         <CheckoutSheet
           qrSlug={slug}
+          isTakeaway={isTakeaway}
           onClose={() => setShowCheckout(false)}
           onSuccess={(order) => {
             setShowCheckout(false);
             setPlacedOrder(order);
+          }}
+          onOrderingPaused={(reason) => {
+            setShowCheckout(false);
+            setLocalPausedReason(reason || 'Ordering is temporarily paused');
           }}
         />
       )}

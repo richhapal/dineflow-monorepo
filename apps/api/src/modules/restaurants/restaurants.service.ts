@@ -8,13 +8,16 @@ import { UpdateRestaurantDto } from './dto/update-restaurant.dto';
 import { UpsertBusinessHoursDto } from './dto/business-hours.dto';
 import { AddHolidayDto } from './dto/add-holiday.dto';
 import { UpdateThemeDto } from './dto/update-theme.dto';
+import { PauseOrderingDto } from './dto/pause-ordering.dto';
 import { AvailabilityService } from './availability.service';
+import { WebsocketGateway } from '../websocket/websocket.gateway';
 
 @Injectable()
 export class RestaurantsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly availability: AvailabilityService,
+    private readonly gateway: WebsocketGateway,
   ) {}
 
   private async assertOwnership(id: string, restaurantId: string) {
@@ -122,5 +125,60 @@ export class RestaurantsService {
       where: { id },
       data: { is_ordering_paused: !restaurant.is_ordering_paused },
     });
+  }
+
+  async setOrderingPause(id: string, dto: PauseOrderingDto, restaurantId: string) {
+    await this.assertOwnership(id, restaurantId);
+    const updated = await this.prisma.restaurant.update({
+      where: { id },
+      data: {
+        is_ordering_paused: dto.paused,
+        ordering_pause_reason: dto.paused ? (dto.reason || null) : null,
+        ordering_pause_until: dto.paused && dto.pause_until ? new Date(dto.pause_until) : null,
+      },
+      select: {
+        id: true,
+        is_ordering_paused: true,
+        ordering_pause_reason: true,
+        ordering_pause_until: true,
+      },
+    });
+    // Broadcast to dashboard + customers in real-time
+    this.gateway.emitRestaurantStatus(id, dto.paused, dto.reason);
+    return updated;
+  }
+
+  async getOrderingStatus(id: string, restaurantId: string) {
+    await this.assertOwnership(id, restaurantId);
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        is_ordering_paused: true,
+        ordering_pause_reason: true,
+        ordering_pause_until: true,
+        single_qr_slug: true,
+      },
+    });
+    if (!restaurant) throw new NotFoundException('Restaurant not found');
+    return restaurant;
+  }
+
+  async getPublicOrderingStatus(slug: string) {
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { slug },
+      select: {
+        id: true,
+        is_ordering_paused: true,
+        ordering_pause_reason: true,
+        ordering_pause_until: true,
+      },
+    });
+    if (!restaurant) throw new NotFoundException('Restaurant not found');
+    return {
+      paused: restaurant.is_ordering_paused,
+      reason: restaurant.ordering_pause_reason,
+      pause_until: restaurant.ordering_pause_until,
+    };
   }
 }

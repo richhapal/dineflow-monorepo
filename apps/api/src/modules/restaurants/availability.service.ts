@@ -20,13 +20,21 @@ export class AvailabilityService {
     return current >= open && current < close;
   }
 
-  async checkAvailability(slug: string): Promise<AvailabilityResult> {
-    const restaurant = await this.prisma.restaurant.findUnique({
-      where: { slug },
-    });
-
+  /** Check by restaurant ID — used by authenticated dashboard endpoints */
+  async checkAvailabilityById(id: string): Promise<AvailabilityResult> {
+    const restaurant = await this.prisma.restaurant.findUnique({ where: { id } });
     if (!restaurant) return { state: 'CLOSED', message: 'Restaurant not found' };
+    return this.computeAvailability(restaurant);
+  }
 
+  async checkAvailability(slug: string): Promise<AvailabilityResult> {
+    const restaurant = await this.prisma.restaurant.findUnique({ where: { slug } });
+    if (!restaurant) return { state: 'CLOSED', message: 'Restaurant not found' };
+    return this.computeAvailability(restaurant);
+  }
+
+  /** Core availability logic — works with any restaurant object */
+  private async computeAvailability(restaurant: any): Promise<AvailabilityResult> {
     // 1. Subscription check
     if (
       restaurant.subscription_status === 'CANCELLED' ||
@@ -48,9 +56,9 @@ export class AvailabilityService {
       return { state: 'DISABLED', message: 'Online ordering is disabled' };
     }
 
-    // 3. Manual open/close toggle
+    // 3. Manual override — owner explicitly forced closed
     if (!restaurant.is_open) {
-      return { state: 'CLOSED', message: 'Restaurant is currently closed' };
+      return { state: 'CLOSED', message: 'Manually closed by owner', manual_override: true } as any;
     }
 
     // 4. Ordering paused
@@ -58,6 +66,7 @@ export class AvailabilityService {
       return { state: 'ORDERING_PAUSED', message: 'Ordering is temporarily paused' };
     }
 
+    // ── Use restaurant's own timezone (server-side, never client time) ──────
     const tz = restaurant.timezone || 'Asia/Kolkata';
     const now = dayjs().tz(tz);
     const todayDate = now.format('YYYY-MM-DD');
@@ -66,10 +75,7 @@ export class AvailabilityService {
 
     // 5. Holiday check
     const holiday = await this.prisma.holiday.findFirst({
-      where: {
-        restaurant_id: restaurant.id,
-        date: new Date(todayDate),
-      },
+      where: { restaurant_id: restaurant.id, date: new Date(todayDate) },
     });
     if (holiday) {
       return {
@@ -86,10 +92,7 @@ export class AvailabilityService {
     });
 
     if (!hours || !hours.is_open) {
-      return {
-        state: 'WEEKLY_OFF',
-        message: 'Closed today',
-      };
+      return { state: 'WEEKLY_OFF', message: 'Closed today' };
     }
 
     if (!this.isWithinHours(currentTime, hours.open_time, hours.close_time)) {
@@ -97,7 +100,9 @@ export class AvailabilityService {
         state: 'CLOSED',
         opens_at: hours.open_time,
         closes_at: hours.close_time,
-        message: `Opens at ${hours.open_time}`,
+        message: currentTime < hours.open_time
+          ? `Opens at ${hours.open_time}`
+          : `Closed — reopens tomorrow at ${hours.open_time}`,
       };
     }
 
@@ -120,6 +125,8 @@ export class AvailabilityService {
       state: 'OPEN',
       opens_at: hours.open_time,
       closes_at: hours.close_time,
+      server_time: now.format('HH:mm'),
+      timezone: tz,
     };
   }
 }

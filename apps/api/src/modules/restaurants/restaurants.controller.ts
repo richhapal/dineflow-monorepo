@@ -4,17 +4,22 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { RestaurantsService } from './restaurants.service';
+import { AvailabilityService } from './availability.service';
 import { UpdateRestaurantDto } from './dto/update-restaurant.dto';
 import { UpsertBusinessHoursDto } from './dto/business-hours.dto';
 import { AddHolidayDto } from './dto/add-holiday.dto';
 import { UpdateThemeDto } from './dto/update-theme.dto';
+import { PauseOrderingDto } from './dto/pause-ordering.dto';
 import { JwtGuard } from '../../common/guards/jwt.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('restaurants')
 @Controller('restaurants')
 export class RestaurantsController {
-  constructor(private readonly restaurantsService: RestaurantsService) {}
+  constructor(
+    private readonly restaurantsService: RestaurantsService,
+    private readonly availabilityService: AvailabilityService,
+  ) {}
 
   @Get('me')
   @UseGuards(JwtGuard)
@@ -80,5 +85,32 @@ export class RestaurantsController {
   @ApiBearerAuth()
   togglePause(@CurrentUser() user: any) {
     return this.restaurantsService.toggleOrderingPaused(user.restaurant_id, user.restaurant_id);
+  }
+
+  @Patch('me/ordering-pause')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  setOrderingPause(@CurrentUser() user: any, @Body() dto: PauseOrderingDto) {
+    return this.restaurantsService.setOrderingPause(user.restaurant_id, dto, user.restaurant_id);
+  }
+
+  /** Live status computed from business hours + server timezone — for the dashboard header */
+  @Get('me/live-status')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getLiveStatus(@CurrentUser() user: any) {
+    return this.availabilityService.checkAvailabilityById(user.restaurant_id);
+  }
+
+  @Get('me/ordering-status')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getOrderingStatus(@CurrentUser() user: any) {
+    return this.restaurantsService.getOrderingStatus(user.restaurant_id, user.restaurant_id);
+  }
+
+  @Get(':slug/ordering-status')
+  getPublicOrderingStatus(@Param('slug') slug: string) {
+    return this.restaurantsService.getPublicOrderingStatus(slug);
   }
 }

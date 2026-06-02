@@ -70,6 +70,7 @@ export const WEBSOCKET_EVENTS = {
   ORDER_NEW: 'order:new',
   ORDER_STATUS: 'order:status',
   ORDER_ITEM_ADDED: 'order:item_added',
+  ORDER_MODIFIED: 'order:modified',
   // Table session events  
   SESSION_JOIN_REQUEST: 'session:join_request',
   SESSION_MEMBER_APPROVED: 'session:member_approved',

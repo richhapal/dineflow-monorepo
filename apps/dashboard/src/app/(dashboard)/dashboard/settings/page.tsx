@@ -41,6 +41,7 @@ interface RestaurantSettings {
   is_ordering_enabled: boolean;
   is_ordering_paused: boolean;
   auto_accept_orders?: boolean;
+  order_timeout_minutes?: number;
   ordering_mode: string;
   whatsapp_bill?: boolean;
   sms_bill?: boolean;
@@ -483,6 +484,7 @@ function OrderingSection({ data, onRefetch }: { data: RestaurantSettings; onRefe
   const [form, setForm] = useState({
     is_ordering_enabled: data.is_ordering_enabled,
     auto_accept_orders: data.auto_accept_orders ?? false,
+    order_timeout_minutes: data.order_timeout_minutes ?? 10,
     ordering_mode: data.ordering_mode || 'SELF',
     whatsapp_bill: data.whatsapp_bill ?? false,
     sms_bill: data.sms_bill ?? false,
@@ -629,6 +631,22 @@ function OrderingSection({ data, onRefetch }: { data: RestaurantSettings; onRefe
             <option value="WAITER">WAITER — staff place orders</option>
             <option value="HYBRID">HYBRID — both</option>
           </select>
+        </FieldRow>
+
+        <FieldRow label="Order timeout (minutes)">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="number"
+              min={1}
+              max={60}
+              style={{ ...inputStyle, width: 80 }}
+              value={form.order_timeout_minutes}
+              onChange={e => set('order_timeout_minutes', Number(e.target.value))}
+            />
+            <span style={{ fontSize: 12, color: 'var(--ink4)', fontFamily: "'Geist', sans-serif" }}>
+              Pending orders auto-cancel after this many minutes if not accepted
+            </span>
+          </div>
         </FieldRow>
       </div>
 

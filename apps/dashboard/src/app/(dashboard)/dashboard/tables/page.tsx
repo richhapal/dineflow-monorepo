@@ -23,6 +23,7 @@ import DeleteTableConfirm from '@/components/tables/DeleteTableConfirm';
 import QRCodesTable from '@/components/tables/QRCodesTable';
 import QRImageModal from '@/components/tables/QRImageModal';
 import GenerateQRModal from '@/components/tables/GenerateQRModal';
+import { SingleQRPanel } from '@/components/ordering/SingleQRPanel';
 
 const ALL_SECTION = '__ALL__';
 
@@ -171,24 +172,26 @@ export default function TablesPage() {
       });
     });
 
-    // Table status update
+    // Table status update — now also carries occupied_since
     socket.on(
       WEBSOCKET_EVENTS.TABLE_STATUS,
-      (data: { table_id: string; status: TableStatus }) => {
+      (data: { table_id: string; status: TableStatus; occupied_since: string | null }) => {
         qc.setQueryData<RestaurantTable[]>(tableKeys.all, (old) =>
           (old ?? []).map((t) =>
-            t.id === data.table_id ? { ...t, status: data.status } : t,
+            t.id === data.table_id
+              ? { ...t, status: data.status, occupied_since: data.occupied_since ?? undefined }
+              : t,
           ),
         );
       },
     );
 
-    // New order — refresh tables
+    // New order — refresh tables (a new order may have changed occupied state)
     socket.on(WEBSOCKET_EVENTS.ORDER_NEW, () => {
       qc.invalidateQueries({ queryKey: tableKeys.all });
     });
 
-    // Order status — refresh tables
+    // Order status change — table status may have changed (confirm/cancel/serve)
     socket.on(WEBSOCKET_EVENTS.ORDER_STATUS, () => {
       qc.invalidateQueries({ queryKey: tableKeys.all });
     });
@@ -462,10 +465,14 @@ export default function TablesPage() {
           onViewQR={(id) => setQrViewId(id)}
           onGenerateQR={() => setShowGenerateQR(true)}
           onRegenerate={(_id) => {
-            // Treat regenerate as delete + create; for now show generate modal
             setShowGenerateQR(true);
           }}
         />
+      </div>
+
+      {/* ─── Single QR Code ───────────────────────────────────────────────────── */}
+      <div style={{ padding: '0 28px 32px' }}>
+        <SingleQRPanel />
       </div>
 
       {/* ─── Popovers & Modals ───────────────────────────────────────────────── */}

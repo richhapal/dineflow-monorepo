@@ -327,4 +327,10 @@ export interface AvailabilityResult {
   resumes_at?: string;
   reason?: string;
   reopen?: string;
+  /** Current time on the server in the restaurant's timezone (HH:mm) */
+  server_time?: string;
+  /** Restaurant's configured timezone (e.g. "Asia/Kolkata") */
+  timezone?: string;
+  /** True when is_open=false was set manually by the owner (not from business hours) */
+  manual_override?: boolean;
 }

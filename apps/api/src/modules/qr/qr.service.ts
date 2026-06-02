@@ -133,6 +133,98 @@ export class QrService {
     return this.prisma.qRCode.update({ where: { id }, data: { is_active: false } });
   }
 
+  /**
+   * Get or create the single shared QR code for this restaurant.
+   * One QR per restaurant — all customers use the same URL.
+   * They enter their name + seat at checkout.
+   */
+  async getOrCreateSingleQR(restaurantId: string): Promise<{
+    qr_image: string;
+    url: string;
+    slug: string;
+    id: string;
+    scans: number;
+  }> {
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+    });
+    if (!restaurant) throw new NotFoundException('Restaurant not found');
+
+    let slug = restaurant.single_qr_slug;
+    let qrRecord: { id: string; slug: string; scans: number } | null = null;
+
+    // Re-use existing single QR if already generated
+    if (slug) {
+      qrRecord = await this.prisma.qRCode.findUnique({
+        where: { slug },
+        select: { id: true, slug: true, scans: true },
+      });
+    }
+
+    // Create if missing
+    if (!qrRecord) {
+      slug = `${restaurant.slug}-main-${Date.now()}`;
+      qrRecord = await this.prisma.qRCode.create({
+        data: {
+          restaurant_id: restaurantId,
+          label: `${restaurant.name} — Outside / Takeaway QR`,
+          slug,
+          is_active: true,
+        },
+        select: { id: true, slug: true, scans: true },
+      });
+
+      // Save the slug back to the restaurant
+      await this.prisma.restaurant.update({
+        where: { id: restaurantId },
+        data: { single_qr_slug: slug },
+      });
+    }
+
+    const url = `${this.menuBaseUrl}/m/${qrRecord.slug}`;
+    const dataUrl: string = await QRCodeLib.toDataURL(url, {
+      type: 'image/png',
+      margin: 2,
+      width: 512,
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+
+    return {
+      id: qrRecord.id,
+      slug: qrRecord.slug,
+      scans: qrRecord.scans,
+      url,
+      qr_image: dataUrl, // full data URL (data:image/png;base64,...)
+    };
+  }
+
+  /**
+   * Force-regenerate the single QR with a fresh slug.
+   * Old slug is deactivated — existing printed QRs stop working.
+   */
+  async regenerateSingleQR(restaurantId: string) {
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+    });
+    if (!restaurant) throw new NotFoundException('Restaurant not found');
+
+    // Deactivate old QR
+    if (restaurant.single_qr_slug) {
+      await this.prisma.qRCode.updateMany({
+        where: { restaurant_id: restaurantId, slug: restaurant.single_qr_slug },
+        data: { is_active: false },
+      });
+    }
+
+    // Clear slug so getOrCreateSingleQR creates a fresh one
+    await this.prisma.restaurant.update({
+      where: { id: restaurantId },
+      data: { single_qr_slug: null },
+    });
+
+    return this.getOrCreateSingleQR(restaurantId);
+  }
+
   async getPublicQRData(slug: string) {
     const qr = await this.prisma.qRCode.findUnique({
       where: { slug },

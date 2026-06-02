@@ -57,4 +57,22 @@ export class QrController {
   disable(@CurrentUser() user: any, @Param('id') id: string) {
     return this.qrService.disable(id, user.restaurant_id);
   }
+
+  // ─── Single shared QR ────────────────────────────────────────────────────────
+
+  /** Get (or auto-create) the restaurant's single shared QR + its image */
+  @Get('single')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getSingleQR(@CurrentUser() user: any) {
+    return this.qrService.getOrCreateSingleQR(user.restaurant_id);
+  }
+
+  /** Force-regenerate with a new slug (invalidates old printed QRs) */
+  @Post('single/regenerate')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  regenerateSingleQR(@CurrentUser() user: any) {
+    return this.qrService.regenerateSingleQR(user.restaurant_id);
+  }
 }
