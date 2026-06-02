@@ -90,4 +90,18 @@ export class BillingController {
   recordPayment(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: RecordPaymentDto) {
     return this.billingService.recordPayment(id, dto, user.restaurant_id);
   }
+
+  @Get('unbilled-orders')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getUnbilledOrders(@CurrentUser() user: any) {
+    return this.billingService.getUnbilledOrders(user.restaurant_id);
+  }
+
+  @Post(':id/cancel')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  cancelBill(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.billingService.cancelBill(id, user.restaurant_id);
+  }
 }

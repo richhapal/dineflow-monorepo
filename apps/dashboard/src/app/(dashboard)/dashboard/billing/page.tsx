@@ -1,184 +1,787 @@
 'use client';
-import { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useState, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { formatINR, formatDate } from '@dineflow/utils';
 import { useDashboardStore } from '@/lib/store';
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface Payment {
+  id: string;
+  method: string;
+  amount: number;
+  status: string;
+  paid_at: string | null;
+  upi_txn_id?: string | null;
+  notes?: string | null;
+}
+
 interface Bill {
   id: string;
+  order_id: string;
   invoice_number: string;
   invoice_date: string;
-  table_id?: string;
-  table_name?: string;
-  customer_name?: string;
-  covers: number;
-  items: { name: string; quantity: number; unit_price: number; total_price: number }[];
+  financial_year: string;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  customer_gstin?: string | null;
   subtotal: number;
+  cgst_rate: number;
   cgst_amount: number;
+  sgst_rate: number;
   sgst_amount: number;
+  service_charge: number;
+  discount_amount: number;
+  round_off: number;
   total_amount: number;
-  payment_method: string;
-  status: 'PAID' | 'PENDING' | 'CANCELLED';
+  hsn_code: string;
+  status: 'DRAFT' | 'GENERATED' | 'SENT' | 'PAID' | 'CANCELLED';
+  whatsapp_sent: boolean;
+  print_count: number;
+  order: {
+    order_number?: number | null;
+    covers: number;
+    order_type: string;
+    table?: { id: string; name: string } | null;
+    items?: Array<{
+      id: string;
+      item_name: string;
+      quantity: number;
+      unit_price: number;
+      total_price: number;
+      is_cancelled: boolean;
+      notes?: string | null;
+      addons?: Array<{ addon_name: string; price: number }>;
+    }>;
+  };
+  payments: Payment[];
+}
+
+interface BillsResponse {
+  bills: Bill[];
+  total: number;
+  page: number;
+  pages: number;
 }
 
 interface GSTSummary {
-  total_revenue: number;
-  taxable_amount: number;
+  total_invoices: number;
+  gross_revenue: number;
+  taxable_value: number;
   cgst: number;
   sgst: number;
   total_gst: number;
 }
 
+interface UnbilledOrder {
+  id: string;
+  order_number?: number | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  covers: number;
+  total_amount: number;
+  completed_at?: string | null;
+  table?: { id: string; name: string } | null;
+  items: Array<{ item_name: string; quantity: number; total_price: number; is_cancelled: boolean }>;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function Skeleton({ h, w }: { h?: number; w?: string | number }) {
+const METHOD_LABELS: Record<string, string> = {
+  UPI: '📱 UPI',
+  CASH: '💵 Cash',
+  CARD: '💳 Card',
+  ONLINE: '🌐 Online',
+  COMPLIMENTARY: '🎁 Complimentary',
+};
+
+const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
+  DRAFT:     { bg: '#F3F4F6', color: '#6B7280' },
+  GENERATED: { bg: '#EFF6FF', color: '#1D4ED8' },
+  SENT:      { bg: '#F0FDF4', color: '#15803D' },
+  PAID:      { bg: '#F0FDF4', color: '#15803D' },
+  CANCELLED: { bg: '#FEF2F2', color: '#DC2626' },
+};
+
+// ─── Shared styles ────────────────────────────────────────────────────────────
+
+const mono: React.CSSProperties = { fontFamily: "'Geist Mono', monospace" };
+const sans: React.CSSProperties = { fontFamily: "'Geist', sans-serif" };
+const serif: React.CSSProperties = { fontFamily: "'Instrument Serif', serif" };
+
+// ─── Skeleton ─────────────────────────────────────────────────────────────────
+
+function Skeleton({ h = 16, w = '100%' }: { h?: number; w?: string | number }) {
   return (
     <div style={{
-      width: w || '100%', height: h || 16, borderRadius: 6,
+      width: w, height: h, borderRadius: 6,
       background: 'linear-gradient(90deg,var(--paper3) 25%,var(--paper2) 50%,var(--paper3) 75%)',
       backgroundSize: '600px 100%', animation: 'shimmer 1.5s infinite linear',
     }} />
   );
 }
 
-function BillStatusBadge({ status }: { status: string }) {
-  const map: Record<string, { bg: string; color: string }> = {
-    PAID: { bg: 'var(--green-bg)', color: 'var(--green)' },
-    PENDING: { bg: 'var(--amber-bg)', color: 'var(--amber)' },
-    CANCELLED: { bg: 'var(--red-bg)', color: 'var(--red)' },
-  };
-  const s = map[status] || map.PENDING;
+// ─── Status badge ─────────────────────────────────────────────────────────────
+
+function StatusBadge({ status }: { status: string }) {
+  const s = STATUS_COLORS[status] || STATUS_COLORS.GENERATED;
   return (
-    <span style={{ background: s.bg, color: s.color, fontSize: 11, fontWeight: 500, padding: '2px 8px', borderRadius: 100, fontFamily: "'Geist', sans-serif" }}>
+    <span style={{
+      ...sans, background: s.bg, color: s.color,
+      fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 100,
+    }}>
       {status}
     </span>
   );
 }
 
-function InvoicePreview({ bill, restaurant, onClose }: {
+// ─── Record Payment Modal ─────────────────────────────────────────────────────
+
+function RecordPaymentModal({
+  bill,
+  onClose,
+  onSuccess,
+}: {
   bill: Bill;
-  restaurant: { name?: string; address?: string; gstin?: string; upi_id?: string } | null;
   onClose: () => void;
+  onSuccess: () => void;
 }) {
-  const sendWhatsApp = useMutation({
-    mutationFn: () => api.post(`/billing/${bill.id}/send-whatsapp`, {}),
+  const amountPaid = bill.payments
+    .filter(p => p.status === 'PAID')
+    .reduce((s, p) => s + Number(p.amount), 0);
+  const remaining = Math.max(0, Number(bill.total_amount) - amountPaid);
+
+  const [method, setMethod] = useState('CASH');
+  const [amount, setAmount] = useState(remaining.toFixed(2));
+  const [upiTxnId, setUpiTxnId] = useState('');
+  const [gatewayRef, setGatewayRef] = useState('');
+  const [notes, setNotes] = useState('');
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.post(`/billing/${bill.id}/payment`, {
+        method,
+        amount: Number(amount),
+        upi_txn_id: upiTxnId || undefined,
+        gateway_ref: gatewayRef || undefined,
+        notes: notes || undefined,
+      }),
+    onSuccess: () => { onSuccess(); onClose(); },
   });
+
+  const inputStyle: React.CSSProperties = {
+    ...sans, width: '100%', padding: '9px 12px', borderRadius: 8,
+    border: '1px solid var(--border)', fontSize: 14, color: 'var(--ink)',
+    background: '#fff', outline: 'none', boxSizing: 'border-box',
+  };
 
   return (
     <div style={{
-      background: '#fff', borderLeft: '1px solid var(--border)',
-      padding: 24, overflowY: 'auto', height: 'calc(100vh - 56px)',
-      position: 'sticky', top: 56, display: 'flex', flexDirection: 'column', gap: 16,
-    }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontFamily: "'Geist', sans-serif", fontWeight: 500, fontSize: 16, color: 'var(--ink)' }}>Invoice</span>
-        <button onClick={onClose} style={{
-          background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--ink4)',
-        }}>×</button>
-      </div>
-
-      {/* Thermal preview */}
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }} onClick={onClose}>
       <div style={{
-        fontFamily: "'Geist Mono', monospace",
-        fontSize: 13, lineHeight: 1.8,
-        background: 'var(--paper)',
-        borderRadius: 10, padding: 20,
-        border: '1px solid var(--border)',
-      }}>
-        {/* Restaurant name */}
-        <p style={{ textAlign: 'center', fontFamily: "'Instrument Serif', serif", fontSize: 16, fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>
-          {restaurant?.name || 'Restaurant'}
-        </p>
-        <p style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink4)', marginBottom: 4 }}>
-          {restaurant?.address || ''} {restaurant?.gstin ? `· GSTIN: ${restaurant.gstin}` : ''}
-        </p>
+        background: '#fff', borderRadius: 16, padding: 28, width: 420,
+        boxShadow: '0 20px 60px rgba(0,0,0,0.15)',
+      }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <h3 style={{ ...serif, fontStyle: 'italic', fontSize: 20, color: 'var(--ink)' }}>Record Payment</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--ink4)' }}>×</button>
+        </div>
 
-        <p style={{ color: 'var(--border2)', margin: '6px 0' }}>{'━'.repeat(24)}</p>
+        {/* Balance summary */}
+        <div style={{
+          background: 'var(--paper2)', borderRadius: 10, padding: '12px 16px', marginBottom: 20,
+          display: 'flex', justifyContent: 'space-between',
+        }}>
+          <div>
+            <p style={{ ...sans, fontSize: 11, color: 'var(--ink4)', marginBottom: 2 }}>TOTAL BILL</p>
+            <p style={{ ...mono, fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>{formatINR(Number(bill.total_amount))}</p>
+          </div>
+          {amountPaid > 0 && (
+            <div style={{ textAlign: 'right' }}>
+              <p style={{ ...sans, fontSize: 11, color: 'var(--ink4)', marginBottom: 2 }}>ALREADY PAID</p>
+              <p style={{ ...mono, fontSize: 18, fontWeight: 700, color: '#15803D' }}>{formatINR(amountPaid)}</p>
+            </div>
+          )}
+          {remaining > 0 && (
+            <div style={{ textAlign: 'right' }}>
+              <p style={{ ...sans, fontSize: 11, color: 'var(--ink4)', marginBottom: 2 }}>REMAINING</p>
+              <p style={{ ...mono, fontSize: 18, fontWeight: 700, color: 'var(--accent)' }}>{formatINR(remaining)}</p>
+            </div>
+          )}
+        </div>
 
-        <p>Invoice: {bill.invoice_number}</p>
-        <p>Date: {formatDate(bill.invoice_date)}</p>
-        <p>Table: {bill.table_name || bill.table_id || '—'} · Covers: {bill.covers}</p>
+        {/* Payment method */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ ...sans, display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+            Payment Method
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {(['CASH', 'UPI', 'CARD', 'COMPLIMENTARY'] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => setMethod(m)}
+                style={{
+                  ...sans, padding: '10px 12px', borderRadius: 8, fontSize: 13, fontWeight: 500,
+                  cursor: 'pointer', textAlign: 'left',
+                  border: method === m ? '2px solid var(--ink)' : '1.5px solid var(--border)',
+                  background: method === m ? 'var(--ink)' : '#fff',
+                  color: method === m ? '#fff' : 'var(--ink3)',
+                }}
+              >
+                {METHOD_LABELS[m]}
+              </button>
+            ))}
+          </div>
+        </div>
 
-        <p style={{ color: 'var(--border2)', margin: '6px 0' }}>{'━'.repeat(24)}</p>
-        <p style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>ITEM</span><span>AMT</span>
-        </p>
-        <p style={{ color: 'var(--border2)', margin: '4px 0' }}>{'━'.repeat(24)}</p>
+        {/* Amount */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ ...sans, display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 6 }}>
+            Amount (₹)
+          </label>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            style={inputStyle}
+            value={amount}
+            onChange={e => setAmount(e.target.value)}
+          />
+        </div>
 
-        {bill.items.map((item, i) => (
-          <p key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {item.quantity}× {item.name}
-            </span>
-            <span style={{ flexShrink: 0 }}>{formatINR(item.total_price)}</span>
-          </p>
-        ))}
-
-        <p style={{ color: 'var(--border2)', margin: '6px 0' }}>{'━'.repeat(24)}</p>
-
-        <p style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Subtotal</span><span>{formatINR(bill.subtotal)}</span>
-        </p>
-        <p style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>CGST @2.5%</span><span>{formatINR(bill.cgst_amount)}</span>
-        </p>
-        <p style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>SGST @2.5%</span><span>{formatINR(bill.sgst_amount)}</span>
-        </p>
-
-        <p style={{ color: 'var(--border2)', margin: '6px 0' }}>{'━'.repeat(24)}</p>
-
-        <p style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
-          <span>TOTAL</span><span>{formatINR(bill.total_amount)}</span>
-        </p>
-
-        <p style={{ color: 'var(--border2)', margin: '6px 0' }}>{'━'.repeat(24)}</p>
-
-        <p>UPI: {restaurant?.upi_id || '—'}</p>
-        <p>HSN/SAC: 996331</p>
-      </div>
-
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button style={{
-          flex: 1, padding: '8px 12px', border: '1.5px solid var(--border2)', borderRadius: 8,
-          background: 'transparent', fontFamily: "'Geist', sans-serif", fontSize: 12,
-          color: 'var(--ink3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-        }}>🖨 Reprint</button>
-        <button
-          onClick={() => sendWhatsApp.mutate()}
-          disabled={sendWhatsApp.isPending}
-          style={{
-            flex: 1, padding: '8px 12px', border: '1.5px solid var(--border2)', borderRadius: 8,
-            background: 'transparent', fontFamily: "'Geist', sans-serif", fontSize: 12,
-            color: 'var(--ink3)', cursor: 'pointer',
-          }}>
-          {sendWhatsApp.isPending ? 'Sending…' : '💬 Resend WhatsApp'}
-        </button>
-        {bill.status !== 'PAID' && (
-          <button style={{
-            width: '100%', padding: '8px 12px', border: '1px solid var(--red-bg)', borderRadius: 8,
-            background: 'transparent', fontFamily: "'Geist', sans-serif", fontSize: 12,
-            color: 'var(--red)', cursor: 'pointer',
-          }}>Cancel bill</button>
+        {/* UPI reference */}
+        {method === 'UPI' && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ ...sans, display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 6 }}>
+              UPI Transaction ID
+            </label>
+            <input style={inputStyle} placeholder="e.g. 123456789012" value={upiTxnId} onChange={e => setUpiTxnId(e.target.value)} />
+          </div>
         )}
+
+        {/* Card / Online reference */}
+        {(method === 'CARD' || method === 'ONLINE') && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ ...sans, display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 6 }}>
+              Reference / Approval Code
+            </label>
+            <input style={inputStyle} placeholder="e.g. TXN987654" value={gatewayRef} onChange={e => setGatewayRef(e.target.value)} />
+          </div>
+        )}
+
+        {/* Notes */}
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ ...sans, display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 6 }}>
+            Notes (optional)
+          </label>
+          <input style={inputStyle} placeholder="e.g. Split payment" value={notes} onChange={e => setNotes(e.target.value)} />
+        </div>
+
+        {mutation.isError && (
+          <p style={{ ...sans, fontSize: 13, color: 'var(--red)', marginBottom: 12 }}>
+            Failed to record payment. Please try again.
+          </p>
+        )}
+
+        <button
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending || !amount || Number(amount) <= 0}
+          style={{
+            ...sans, width: '100%', padding: '11px', borderRadius: 10,
+            background: 'var(--accent)', color: '#fff', border: 'none',
+            fontSize: 15, fontWeight: 600, cursor: 'pointer',
+            opacity: (mutation.isPending || !amount || Number(amount) <= 0) ? 0.6 : 1,
+          }}
+        >
+          {mutation.isPending ? 'Recording…' : `Record ${formatINR(Number(amount) || 0)} via ${method}`}
+        </button>
       </div>
     </div>
   );
 }
 
+// ─── Invoice Panel ─────────────────────────────────────────────────────────────
+
+function InvoicePanel({
+  billId,
+  restaurant,
+  onClose,
+  onRefetch,
+}: {
+  billId: string;
+  restaurant: { name?: string; address?: string; gstin?: string; upi_id?: string } | null;
+  onClose: () => void;
+  onRefetch: () => void;
+}) {
+  const [showPayModal, setShowPayModal] = useState(false);
+  const [cancelConfirm, setCancelConfirm] = useState(false);
+  const qc = useQueryClient();
+
+  const { data: bill, isLoading } = useQuery<Bill>({
+    queryKey: ['bill', billId],
+    queryFn: () => api.get(`/billing/${billId}`).then(r => r.data),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: () => api.post(`/billing/${billId}/cancel`, {}),
+    onSuccess: () => { onRefetch(); qc.invalidateQueries({ queryKey: ['bill', billId] }); setCancelConfirm(false); onClose(); },
+  });
+
+  const whatsappMutation = useMutation({
+    mutationFn: () => api.post(`/billing/${billId}/send-whatsapp`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['bill', billId] }),
+  });
+
+  const handlePrint = () => window.print();
+
+  if (isLoading || !bill) {
+    return (
+      <div style={{
+        background: '#fff', borderLeft: '1px solid var(--border)',
+        padding: 24, height: 'calc(100vh - 56px)', position: 'sticky', top: 56,
+        display: 'flex', flexDirection: 'column', gap: 12,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <Skeleton h={20} w={120} />
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--ink4)' }}>×</button>
+        </div>
+        {[1,2,3,4,5].map(i => <Skeleton key={i} h={14} w={i === 3 ? '70%' : '100%'} />)}
+      </div>
+    );
+  }
+
+  const items = bill.order?.items?.filter(i => !i.is_cancelled) ?? [];
+  const amountPaid = bill.payments.filter(p => p.status === 'PAID').reduce((s, p) => s + Number(p.amount), 0);
+  const remaining = Math.max(0, Number(bill.total_amount) - amountPaid);
+  const cgstPct = (Number(bill.cgst_rate) * 100).toFixed(1);
+  const sgstPct = (Number(bill.sgst_rate) * 100).toFixed(1);
+  const tableName = bill.order?.table?.name;
+
+  return (
+    <>
+      {/* Print styles — only the invoice-print div shows when printing */}
+      <style>{`
+        @media print {
+          body > * { display: none !important; }
+          .invoice-print { display: block !important; position: fixed; top: 0; left: 0; width: 100%; }
+        }
+        .invoice-print { display: none; }
+      `}</style>
+
+      {/* Printable invoice (hidden until print) */}
+      <div className="invoice-print" style={{ fontFamily: 'monospace', fontSize: 13, lineHeight: 1.8, padding: 24, maxWidth: 380, margin: '0 auto' }}>
+        <p style={{ textAlign: 'center', fontWeight: 700, fontSize: 16 }}>{restaurant?.name || 'Restaurant'}</p>
+        {restaurant?.address && <p style={{ textAlign: 'center', fontSize: 11 }}>{restaurant.address}</p>}
+        {restaurant?.gstin && <p style={{ textAlign: 'center', fontSize: 11 }}>GSTIN: {restaurant.gstin}</p>}
+        <p>{'━'.repeat(32)}</p>
+        <p>Invoice: {bill.invoice_number}</p>
+        <p>Date: {formatDate(bill.invoice_date)}</p>
+        {tableName && <p>Table: {tableName} · Covers: {bill.order.covers}</p>}
+        {bill.customer_name && <p>Customer: {bill.customer_name}</p>}
+        <p>{'━'.repeat(32)}</p>
+        {items.map((item, i) => (
+          <p key={i} style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>{item.quantity}× {item.item_name}</span>
+            <span>₹{Number(item.total_price).toFixed(2)}</span>
+          </p>
+        ))}
+        <p>{'━'.repeat(32)}</p>
+        <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>Subtotal</span><span>₹{Number(bill.subtotal).toFixed(2)}</span></p>
+        {Number(bill.cgst_amount) > 0 && <>
+          <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>CGST @{cgstPct}%</span><span>₹{Number(bill.cgst_amount).toFixed(2)}</span></p>
+          <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>SGST @{sgstPct}%</span><span>₹{Number(bill.sgst_amount).toFixed(2)}</span></p>
+        </>}
+        {Number(bill.service_charge) > 0 && <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>Service charge</span><span>₹{Number(bill.service_charge).toFixed(2)}</span></p>}
+        {Number(bill.discount_amount) > 0 && <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>Discount</span><span>-₹{Number(bill.discount_amount).toFixed(2)}</span></p>}
+        <p>{'━'.repeat(32)}</p>
+        <p style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}><span>TOTAL</span><span>₹{Number(bill.total_amount).toFixed(2)}</span></p>
+        {restaurant?.upi_id && <p>UPI: {restaurant.upi_id}</p>}
+        <p>HSN/SAC: {bill.hsn_code}</p>
+        <p style={{ textAlign: 'center', marginTop: 8 }}>Thank you!</p>
+      </div>
+
+      {/* On-screen panel */}
+      <div style={{
+        background: '#fff', borderLeft: '1px solid var(--border)',
+        overflowY: 'auto', height: 'calc(100vh - 56px)',
+        position: 'sticky', top: 56, display: 'flex', flexDirection: 'column',
+      }}>
+        {/* Panel header */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ ...sans, fontWeight: 600, fontSize: 15, color: 'var(--ink)' }}>Invoice</span>
+            <StatusBadge status={bill.status} />
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--ink4)' }}>×</button>
+        </div>
+
+        {/* Thermal receipt */}
+        <div style={{ padding: '20px', flexGrow: 1 }}>
+          <div style={{
+            ...mono, fontSize: 13, lineHeight: 1.9,
+            background: 'var(--paper)', borderRadius: 10, padding: 20,
+            border: '1px solid var(--border)',
+          }}>
+            {/* Restaurant header */}
+            <p style={{ ...serif, textAlign: 'center', fontSize: 16, fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>
+              {restaurant?.name || 'Restaurant'}
+            </p>
+            {restaurant?.address && (
+              <p style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink4)', marginBottom: 2 }}>
+                {restaurant.address}
+              </p>
+            )}
+            {restaurant?.gstin && (
+              <p style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink4)', marginBottom: 2 }}>
+                GSTIN: {restaurant.gstin}
+              </p>
+            )}
+
+            <p style={{ color: 'var(--border2)', margin: '8px 0' }}>{'━'.repeat(28)}</p>
+
+            <p>Invoice: <strong>{bill.invoice_number}</strong></p>
+            <p>Date: {formatDate(bill.invoice_date)}</p>
+            <p>F.Y.: {bill.financial_year}</p>
+            {tableName && <p>Table: {tableName} · Covers: {bill.order.covers}</p>}
+            {bill.customer_name && <p>Customer: {bill.customer_name}</p>}
+            {bill.customer_phone && <p>Phone: {bill.customer_phone}</p>}
+            {bill.customer_gstin && <p>GSTIN: {bill.customer_gstin}</p>}
+
+            <p style={{ color: 'var(--border2)', margin: '8px 0' }}>{'━'.repeat(28)}</p>
+
+            {/* Header row */}
+            <p style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--ink4)' }}>
+              <span>ITEM</span><span>QTY × PRICE</span><span>AMT</span>
+            </p>
+            <p style={{ color: 'var(--border2)', margin: '4px 0' }}>{'━'.repeat(28)}</p>
+
+            {items.length === 0 ? (
+              <p style={{ ...sans, fontSize: 12, color: 'var(--ink4)', fontStyle: 'italic' }}>No items</p>
+            ) : items.map((item, i) => (
+              <div key={i}>
+                <p style={{ display: 'flex', justifyContent: 'space-between', gap: 4 }}>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.item_name}
+                  </span>
+                  <span style={{ flexShrink: 0, color: 'var(--ink4)', fontSize: 12 }}>
+                    {item.quantity}×₹{Number(item.unit_price).toFixed(0)}
+                  </span>
+                  <span style={{ flexShrink: 0, fontWeight: 600 }}>
+                    ₹{Number(item.total_price).toFixed(2)}
+                  </span>
+                </p>
+                {item.addons?.map((a, ai) => (
+                  <p key={ai} style={{ fontSize: 11, color: 'var(--ink4)', paddingLeft: 8 }}>
+                    + {a.addon_name} ₹{Number(a.price).toFixed(2)}
+                  </p>
+                ))}
+              </div>
+            ))}
+
+            <p style={{ color: 'var(--border2)', margin: '8px 0' }}>{'━'.repeat(28)}</p>
+
+            {/* Amounts */}
+            {[
+              { label: 'Subtotal', value: Number(bill.subtotal).toFixed(2) },
+              ...(Number(bill.cgst_amount) > 0 ? [
+                { label: `CGST @${cgstPct}%`, value: Number(bill.cgst_amount).toFixed(2) },
+                { label: `SGST @${sgstPct}%`, value: Number(bill.sgst_amount).toFixed(2) },
+              ] : []),
+              ...(Number(bill.service_charge) > 0 ? [{ label: 'Service charge', value: Number(bill.service_charge).toFixed(2) }] : []),
+              ...(Number(bill.discount_amount) > 0 ? [{ label: 'Discount', value: `-${Number(bill.discount_amount).toFixed(2)}` }] : []),
+              ...(Number(bill.round_off) !== 0 ? [{ label: 'Round off', value: Number(bill.round_off).toFixed(2) }] : []),
+            ].map(({ label, value }) => (
+              <p key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--ink4)' }}>{label}</span>
+                <span>₹{value}</span>
+              </p>
+            ))}
+
+            <p style={{ color: 'var(--border2)', margin: '8px 0' }}>{'━'.repeat(28)}</p>
+
+            <p style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 15 }}>
+              <span>TOTAL</span><span>₹{Number(bill.total_amount).toFixed(2)}</span>
+            </p>
+
+            {/* Payment status */}
+            {bill.payments.length > 0 && (
+              <>
+                <p style={{ color: 'var(--border2)', margin: '8px 0' }}>{'━'.repeat(28)}</p>
+                {bill.payments.map(p => (
+                  <p key={p.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                    <span style={{ color: 'var(--ink4)' }}>{METHOD_LABELS[p.method] || p.method}</span>
+                    <span style={{ color: '#15803D', fontWeight: 600 }}>✓ ₹{Number(p.amount).toFixed(2)}</span>
+                  </p>
+                ))}
+                {remaining > 0 && (
+                  <p style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--red)' }}>
+                    <span>Balance due</span>
+                    <span>₹{remaining.toFixed(2)}</span>
+                  </p>
+                )}
+              </>
+            )}
+
+            <p style={{ color: 'var(--border2)', margin: '8px 0' }}>{'━'.repeat(28)}</p>
+
+            {restaurant?.upi_id && <p>UPI: {restaurant.upi_id}</p>}
+            <p>HSN/SAC: {bill.hsn_code}</p>
+            <p style={{ textAlign: 'center', color: 'var(--ink4)', fontSize: 12, marginTop: 6 }}>Thank you for dining with us!</p>
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div style={{
+          padding: '16px 20px', borderTop: '1px solid var(--border)',
+          display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0,
+        }}>
+          {/* Primary: Record payment (if not fully paid / not cancelled) */}
+          {bill.status !== 'PAID' && bill.status !== 'CANCELLED' && (
+            <button
+              onClick={() => setShowPayModal(true)}
+              style={{
+                ...sans, width: '100%', padding: '10px', borderRadius: 8,
+                background: 'var(--accent)', color: '#fff', border: 'none',
+                fontSize: 14, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              {remaining > 0 ? `💰 Record Payment · ${formatINR(remaining)} due` : '💰 Record Payment'}
+            </button>
+          )}
+
+          {bill.status === 'PAID' && (
+            <div style={{
+              ...sans, textAlign: 'center', padding: '10px', borderRadius: 8,
+              background: '#F0FDF4', color: '#15803D', fontSize: 14, fontWeight: 600,
+              border: '1px solid #BBF7D0',
+            }}>
+              ✓ Fully Paid · {formatINR(Number(bill.total_amount))}
+            </div>
+          )}
+
+          {/* Secondary actions */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={handlePrint}
+              style={{
+                ...sans, flex: 1, padding: '9px', border: '1.5px solid var(--border2)',
+                borderRadius: 8, background: 'transparent', fontSize: 13,
+                color: 'var(--ink3)', cursor: 'pointer',
+              }}
+            >
+              🖨 Print
+            </button>
+            <button
+              onClick={() => whatsappMutation.mutate()}
+              disabled={whatsappMutation.isPending}
+              style={{
+                ...sans, flex: 1, padding: '9px', border: '1.5px solid var(--border2)',
+                borderRadius: 8, background: 'transparent', fontSize: 13,
+                color: 'var(--ink3)', cursor: 'pointer',
+                opacity: whatsappMutation.isPending ? 0.6 : 1,
+              }}
+            >
+              {whatsappMutation.isSuccess ? '✓ Sent' : bill.whatsapp_sent ? '💬 Resend WA' : '💬 Send WA'}
+            </button>
+          </div>
+
+          {/* Cancel */}
+          {bill.status !== 'PAID' && bill.status !== 'CANCELLED' && (
+            cancelConfirm ? (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => cancelMutation.mutate()}
+                  disabled={cancelMutation.isPending}
+                  style={{
+                    ...sans, flex: 1, padding: '9px', borderRadius: 8,
+                    background: 'var(--red, #dc2626)', color: '#fff', border: 'none',
+                    fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  {cancelMutation.isPending ? 'Cancelling…' : 'Yes, cancel bill'}
+                </button>
+                <button
+                  onClick={() => setCancelConfirm(false)}
+                  style={{
+                    ...sans, padding: '9px 16px', borderRadius: 8, border: '1.5px solid var(--border2)',
+                    background: 'transparent', fontSize: 13, color: 'var(--ink4)', cursor: 'pointer',
+                  }}
+                >
+                  No
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setCancelConfirm(true)}
+                style={{
+                  ...sans, width: '100%', padding: '8px', border: '1px solid rgba(220,38,38,0.2)',
+                  borderRadius: 8, background: '#FEF2F2', fontSize: 12,
+                  color: 'var(--red, #dc2626)', cursor: 'pointer',
+                }}
+              >
+                Cancel bill
+              </button>
+            )
+          )}
+        </div>
+      </div>
+
+      {showPayModal && (
+        <RecordPaymentModal
+          bill={bill}
+          onClose={() => setShowPayModal(false)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['bill', billId] });
+            onRefetch();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// ─── Unbilled Orders Tab ──────────────────────────────────────────────────────
+
+function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void }) {
+  const qc = useQueryClient();
+  const { data: orders, isLoading } = useQuery<UnbilledOrder[]>({
+    queryKey: ['unbilled-orders'],
+    queryFn: () => api.get('/billing/unbilled-orders').then(r => r.data),
+  });
+
+  const [generating, setGenerating] = useState<string | null>(null);
+
+  const generate = async (orderId: string) => {
+    setGenerating(orderId);
+    try {
+      await api.post(`/billing/generate/${orderId}`, {});
+      qc.invalidateQueries({ queryKey: ['unbilled-orders'] });
+      onBillGenerated();
+    } finally {
+      setGenerating(null);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+        {[1,2,3].map(i => (
+          <div key={i} style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+            <Skeleton h={16} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!orders || orders.length === 0) {
+    return (
+      <div style={{
+        background: '#fff', border: '1px solid var(--border)', borderRadius: 12,
+        padding: '60px 24px', textAlign: 'center',
+      }}>
+        <p style={{ fontSize: 32, marginBottom: 12 }}>✅</p>
+        <p style={{ ...sans, fontSize: 15, fontWeight: 600, color: 'var(--ink)', marginBottom: 4 }}>All caught up!</p>
+        <p style={{ ...sans, fontSize: 13, color: 'var(--ink4)' }}>All completed orders already have bills generated.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+      <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--paper2)' }}>
+        <span style={{ ...sans, fontSize: 12, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+          {orders.length} completed order{orders.length !== 1 ? 's' : ''} without a bill
+        </span>
+      </div>
+      {orders.map(order => {
+        const items = order.items.filter(i => !i.is_cancelled);
+        return (
+          <div
+            key={order.id}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 16,
+              padding: '14px 20px', borderBottom: '1px solid var(--border)',
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>
+                  #{String(order.order_number ?? 0).padStart(2, '0')}
+                </span>
+                {order.table && (
+                  <span style={{
+                    ...sans, fontSize: 11, background: 'var(--amber-bg)', color: 'var(--amber)',
+                    padding: '1px 7px', borderRadius: 100, fontWeight: 500,
+                  }}>
+                    {order.table.name}
+                  </span>
+                )}
+                <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)' }}>
+                  {order.covers} guest{order.covers !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <span style={{ ...sans, fontSize: 12, color: 'var(--ink3)' }}>
+                  {order.customer_name || 'Guest'}
+                </span>
+                <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)' }}>
+                  {items.length} item{items.length !== 1 ? 's' : ''}
+                </span>
+                {order.completed_at && (
+                  <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)' }}>
+                    Completed {formatDate(order.completed_at)}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+              <span style={{ ...mono, fontSize: 15, fontWeight: 700, color: 'var(--ink)' }}>
+                {formatINR(Number(order.total_amount))}
+              </span>
+              <button
+                onClick={() => generate(order.id)}
+                disabled={generating === order.id}
+                style={{
+                  ...sans, padding: '8px 16px', borderRadius: 8,
+                  background: 'var(--accent)', color: '#fff', border: 'none',
+                  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                  opacity: generating === order.id ? 0.6 : 1,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {generating === order.id ? 'Generating…' : '+ Generate Bill'}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
 export default function BillingPage() {
   const { restaurant } = useDashboardStore();
+  const qc = useQueryClient();
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
-  const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
+  const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
+  const [activeTab, setActiveTab] = useState<'bills' | 'unbilled'>('bills');
 
-  const { data: bills, isLoading: billsLoading } = useQuery<Bill[]>({
+  const { data: billsRes, isLoading: billsLoading } = useQuery<BillsResponse>({
     queryKey: ['bills', month, year],
     queryFn: () => api.get(`/billing?month=${month}&year=${year}`).then(r => r.data),
   });
@@ -187,6 +790,16 @@ export default function BillingPage() {
     queryKey: ['gst-summary', month, year],
     queryFn: () => api.get(`/billing/gst-summary?month=${month}&year=${year}`).then(r => r.data),
   });
+
+  const { data: unbilledOrders } = useQuery<UnbilledOrder[]>({
+    queryKey: ['unbilled-orders'],
+    queryFn: () => api.get('/billing/unbilled-orders').then(r => r.data),
+  });
+
+  const refetchBills = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ['bills', month, year] });
+    qc.invalidateQueries({ queryKey: ['gst-summary', month, year] });
+  }, [qc, month, year]);
 
   const handlePrevMonth = () => {
     if (month === 1) { setMonth(12); setYear(y => y - 1); }
@@ -201,218 +814,297 @@ export default function BillingPage() {
     const res = await api.get(`/billing/export-gstr1?month=${month}&year=${year}`, { responseType: 'blob' });
     const url = URL.createObjectURL(res.data);
     const a = document.createElement('a');
-    a.href = url; a.download = `GSTR1-${month}-${year}.csv`; a.click();
+    a.href = url;
+    a.download = `GSTR1-${MONTH_NAMES[month - 1]}-${year}.csv`;
+    a.click();
     URL.revokeObjectURL(url);
   };
 
-  const filteredBills = (bills || []).filter(b => {
-    const matchSearch = !search || b.invoice_number.toLowerCase().includes(search.toLowerCase()) || b.customer_name?.toLowerCase().includes(search.toLowerCase());
+  const bills = billsRes?.bills ?? [];
+  const filteredBills = bills.filter(b => {
+    const q = search.toLowerCase();
+    const matchSearch = !search
+      || b.invoice_number.toLowerCase().includes(q)
+      || (b.customer_name ?? '').toLowerCase().includes(q)
+      || (b.order?.table?.name ?? '').toLowerCase().includes(q);
     const matchStatus = statusFilter === 'All' || b.status === statusFilter;
     return matchSearch && matchStatus;
   });
 
+  const unbilledCount = unbilledOrders?.length ?? 0;
+
   return (
     <>
-      <style>{`@keyframes shimmer{0%{background-position:-600px 0}100%{background-position:600px 0}}`}</style>
-      <div style={{ padding: 28 }}>
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+      <style>{`
+        @keyframes shimmer { 0%{background-position:-600px 0} 100%{background-position:600px 0} }
+        @media print {
+          body > * { display: none !important; }
+          .invoice-print { display: block !important; position: fixed; top: 0; left: 0; width: 100%; }
+        }
+      `}</style>
+
+      <div style={{ padding: '24px 28px', background: 'var(--paper, #fafaf9)', minHeight: 'calc(100vh - 56px)' }}>
+
+        {/* ── Header ── */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <h1 style={{ fontFamily: "'Instrument Serif', serif", fontStyle: 'italic', fontSize: 26, color: 'var(--ink)' }}>Billing</h1>
-            {/* Month selector */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--paper3)', border: '1px solid var(--border)', borderRadius: 100, padding: '4px 10px' }}>
+            <h1 style={{ ...serif, fontStyle: 'italic', fontSize: 26, color: 'var(--ink)' }}>Billing</h1>
+            {/* Month navigator */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              background: 'var(--paper3)', border: '1px solid var(--border)',
+              borderRadius: 100, padding: '4px 10px',
+            }}>
               <button onClick={handlePrevMonth} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--ink4)', padding: '0 4px' }}>←</button>
-              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 13, color: 'var(--ink)', padding: '0 4px', minWidth: 90, textAlign: 'center' }}>
+              <span style={{ ...mono, fontSize: 13, color: 'var(--ink)', minWidth: 96, textAlign: 'center' }}>
                 {MONTH_NAMES[month - 1]} {year}
               </span>
               <button onClick={handleNextMonth} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--ink4)', padding: '0 4px' }}>→</button>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={handleExport} style={{
-              padding: '9px 18px', background: 'var(--green-bg)', color: 'var(--green)',
-              border: '1px solid rgba(45,122,74,.2)', borderRadius: 8,
-              fontFamily: "'Geist', sans-serif", fontWeight: 500, fontSize: 14, cursor: 'pointer',
-            }}>Export GSTR-1 CSV</button>
-            <button style={{
-              padding: '9px 18px', border: '1.5px solid var(--border2)', borderRadius: 8,
-              background: 'transparent', fontFamily: "'Geist', sans-serif", fontSize: 14,
-              color: 'var(--ink3)', cursor: 'pointer',
-            }}>Send to CA</button>
-          </div>
+          <button
+            onClick={handleExport}
+            style={{
+              ...sans, padding: '9px 18px', background: '#F0FDF4', color: '#15803D',
+              border: '1px solid #BBF7D0', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer',
+            }}
+          >
+            ↓ Export GSTR-1 CSV
+          </button>
         </div>
 
-        {/* GST Summary banner */}
+        {/* ── GST Summary Banner ── */}
         <div style={{
-          background: 'var(--accent-bg)', border: '1px solid var(--accent-border)',
-          borderRadius: 'var(--radius-lg)', padding: '20px 24px', marginBottom: 20,
+          background: 'var(--accent-bg, #EFF6FF)', border: '1px solid var(--accent-border, #DBEAFE)',
+          borderRadius: 12, padding: '18px 24px', marginBottom: 20,
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <span style={{ fontFamily: "'Geist', sans-serif", fontWeight: 600, fontSize: 14, color: 'var(--accent)' }}>
-              {MONTH_NAMES[month - 1]} {year} GST Summary
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <span style={{ ...sans, fontWeight: 600, fontSize: 13, color: 'var(--accent, #1D4ED8)' }}>
+              {MONTH_NAMES[month - 1]} {year} — GST Summary
             </span>
-            <a href="#" style={{ fontFamily: "'Geist', sans-serif", fontSize: 13, color: 'var(--accent)', textDecoration: 'none' }}>Send to CA →</a>
+            {!gstLoading && gstSummary && (
+              <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)' }}>
+                {gstSummary.total_invoices} invoice{gstSummary.total_invoices !== 1 ? 's' : ''}
+              </span>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 0 }}>
             {gstLoading ? (
-              <div style={{ flex: 1 }}><Skeleton h={40} /></div>
-            ) : (
+              <div style={{ flex: 1 }}><Skeleton h={36} /></div>
+            ) : !gstSummary ? null : (
               [
-                { label: 'Total revenue', value: formatINR(gstSummary?.total_revenue || 0) },
-                { label: 'Taxable amount', value: formatINR(gstSummary?.taxable_amount || 0) },
-                { label: 'CGST @2.5%', value: formatINR(gstSummary?.cgst || 0) },
-                { label: 'SGST @2.5%', value: formatINR(gstSummary?.sgst || 0) },
-                { label: 'Total GST', value: formatINR(gstSummary?.total_gst || 0) },
-              ].map((stat, idx, arr) => (
-                <div key={stat.label} style={{
+                { label: 'Gross Revenue',   value: formatINR(gstSummary.gross_revenue) },
+                { label: 'Taxable Value',    value: formatINR(gstSummary.taxable_value) },
+                { label: 'CGST Collected',   value: formatINR(gstSummary.cgst) },
+                { label: 'SGST Collected',   value: formatINR(gstSummary.sgst) },
+                { label: 'Total GST',        value: formatINR(gstSummary.total_gst) },
+              ].map(({ label, value }, idx, arr) => (
+                <div key={label} style={{
                   flex: 1,
                   paddingLeft: idx > 0 ? 20 : 0,
                   paddingRight: idx < arr.length - 1 ? 20 : 0,
-                  borderLeft: idx > 0 ? '1px solid var(--accent-border)' : 'none',
+                  borderLeft: idx > 0 ? '1px solid var(--accent-border, #DBEAFE)' : 'none',
                 }}>
-                  <p style={{ fontFamily: "'Geist Mono', monospace", fontSize: 20, fontWeight: 500, color: 'var(--ink)', marginBottom: 3 }}>{stat.value}</p>
-                  <p style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)' }}>{stat.label}</p>
+                  <p style={{ ...mono, fontSize: 19, fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>{value}</p>
+                  <p style={{ ...sans, fontSize: 11, color: 'var(--ink4)' }}>{label}</p>
                 </div>
               ))
             )}
           </div>
         </div>
 
-        {/* Bills table */}
-        <div style={{ display: 'grid', gridTemplateColumns: selectedBill ? '1fr 480px' : '1fr', gap: 0 }}>
-          {/* Main table */}
-          <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: selectedBill ? 'var(--radius-lg) 0 0 var(--radius-lg)' : 'var(--radius-lg)', overflow: 'hidden' }}>
-            {/* Toolbar */}
-            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-              <input
-                placeholder="Search invoices…" value={search} onChange={e => setSearch(e.target.value)}
-                style={{
-                  width: 200, border: '1px solid var(--border)', borderRadius: 8,
-                  padding: '7px 12px', fontFamily: "'Geist', sans-serif", fontSize: 13, outline: 'none',
-                }}
-              />
-              <select
-                value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-                style={{
-                  border: '1px solid var(--border)', borderRadius: 8, padding: '7px 12px',
-                  fontFamily: "'Geist', sans-serif", fontSize: 13, outline: 'none', background: '#fff',
-                }}
-              >
-                <option>All</option>
-                <option>PAID</option>
-                <option>PENDING</option>
-                <option>CANCELLED</option>
-              </select>
-              <div style={{ flex: 1 }} />
-              <button style={{
-                padding: '7px 14px', border: '1.5px solid var(--border2)', borderRadius: 8,
-                background: 'transparent', fontFamily: "'Geist', sans-serif", fontSize: 12,
-                color: 'var(--ink3)', cursor: 'pointer',
-              }}>🖨 Print all</button>
-            </div>
+        {/* ── Tabs ── */}
+        <div style={{
+          display: 'flex', gap: 2,
+          borderBottom: '1px solid var(--border)', marginBottom: 16,
+        }}>
+          {([
+            { id: 'bills', label: '🧾 Bills', count: billsRes?.total },
+            { id: 'unbilled', label: '⏳ Unbilled Orders', count: unbilledCount },
+          ] as const).map(({ id, label, count }) => {
+            const active = activeTab === id;
+            return (
+              <button key={id} onClick={() => setActiveTab(id)} style={{
+                ...sans, padding: '8px 16px', border: 'none',
+                borderBottom: active ? '2px solid var(--ink)' : '2px solid transparent',
+                background: 'none', cursor: 'pointer', fontSize: 13,
+                fontWeight: active ? 600 : 400,
+                color: active ? 'var(--ink)' : 'var(--ink4)',
+                display: 'flex', alignItems: 'center', gap: 6, marginBottom: -1,
+              }}>
+                {label}
+                {count != null && count > 0 && (
+                  <span style={{
+                    ...sans, fontSize: 11, fontWeight: 600,
+                    background: active ? 'var(--ink)' : 'var(--paper3)',
+                    color: active ? '#fff' : 'var(--ink4)',
+                    padding: '1px 6px', borderRadius: 100,
+                  }}>{count}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
+        {/* ── Bills Tab ── */}
+        {activeTab === 'bills' && (
+          <div style={{ display: 'grid', gridTemplateColumns: selectedBillId ? '1fr 400px' : '1fr', gap: 0, alignItems: 'start' }}>
             {/* Table */}
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: 'var(--paper2)' }}>
-                    {['Invoice #', 'Date', 'Table', 'Customer', 'Items', 'Amount', 'GST', 'Status', 'Actions'].map(col => (
-                      <th key={col} style={{
-                        padding: '10px 16px', textAlign: 'left',
-                        fontFamily: "'Geist', sans-serif", fontWeight: 600, fontSize: 11,
-                        color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em',
-                        whiteSpace: 'nowrap',
-                      }}>{col}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {billsLoading ? (
-                    [...Array(5)].map((_, i) => (
-                      <tr key={i}><td colSpan={9} style={{ padding: '12px 16px' }}><Skeleton h={20} /></td></tr>
-                    ))
-                  ) : filteredBills.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} style={{ padding: '40px 16px', textAlign: 'center', fontFamily: "'Geist', sans-serif", fontSize: 13, color: 'var(--ink4)' }}>
-                        No bills found for this period
-                      </td>
+            <div style={{
+              background: '#fff', border: '1px solid var(--border)',
+              borderRadius: selectedBillId ? '12px 0 0 12px' : 12, overflow: 'hidden',
+            }}>
+              {/* Toolbar */}
+              <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input
+                  placeholder="Search invoice, customer, table…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  style={{
+                    ...sans, flex: 1, maxWidth: 260, border: '1px solid var(--border)', borderRadius: 8,
+                    padding: '7px 12px', fontSize: 13, outline: 'none', color: 'var(--ink)',
+                  }}
+                />
+                <select
+                  value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value)}
+                  style={{
+                    ...sans, border: '1px solid var(--border)', borderRadius: 8, padding: '7px 12px',
+                    fontSize: 13, outline: 'none', background: '#fff', color: 'var(--ink)',
+                  }}
+                >
+                  <option>All</option>
+                  <option>GENERATED</option>
+                  <option>SENT</option>
+                  <option>PAID</option>
+                  <option>CANCELLED</option>
+                </select>
+              </div>
+
+              {/* Table */}
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: 'var(--paper2)' }}>
+                      {['Invoice #', 'Date', 'Order', 'Customer', 'Amount', 'GST', 'Payments', 'Status', ''].map(col => (
+                        <th key={col} style={{
+                          ...sans, padding: '10px 14px', textAlign: 'left',
+                          fontWeight: 600, fontSize: 11, color: 'var(--ink4)',
+                          textTransform: 'uppercase', letterSpacing: '.06em', whiteSpace: 'nowrap',
+                        }}>{col}</th>
+                      ))}
                     </tr>
-                  ) : (
-                    filteredBills.map(bill => (
-                      <tr key={bill.id} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--paper2)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                      >
-                        <td style={{ padding: '12px 16px' }}>
-                          <span
-                            title={bill.invoice_number}
-                            style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, color: 'var(--ink4)' }}
-                          >
-                            …{bill.invoice_number.slice(-8)}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px 16px', fontFamily: "'Geist', sans-serif", fontSize: 12, color: 'var(--ink3)', whiteSpace: 'nowrap' }}>
-                          {formatDate(bill.invoice_date)}
-                        </td>
-                        <td style={{ padding: '12px 16px' }}>
-                          {bill.table_name && (
-                            <span style={{ background: 'var(--amber-bg)', color: 'var(--amber)', fontSize: 11, fontWeight: 500, padding: '2px 8px', borderRadius: 100, fontFamily: "'Geist Mono', monospace" }}>
-                              {bill.table_name}
-                            </span>
-                          )}
-                        </td>
-                        <td style={{ padding: '12px 16px', fontFamily: "'Geist', sans-serif", fontSize: 13, color: 'var(--ink)' }}>
-                          {bill.customer_name || '—'}
-                        </td>
-                        <td style={{ padding: '12px 16px', fontFamily: "'Geist', sans-serif", fontSize: 12, color: 'var(--ink4)' }}>
-                          {bill.items.length} items
-                        </td>
-                        <td style={{ padding: '12px 16px', fontFamily: "'Geist Mono', monospace", fontSize: 13, fontWeight: 500, color: 'var(--ink)', whiteSpace: 'nowrap' }}>
-                          {formatINR(bill.total_amount)}
-                        </td>
-                        <td style={{ padding: '12px 16px', fontFamily: "'Geist Mono', monospace", fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>
-                          {formatINR(bill.cgst_amount + bill.sgst_amount)}
-                        </td>
-                        <td style={{ padding: '12px 16px' }}>
-                          <BillStatusBadge status={bill.status} />
-                        </td>
-                        <td style={{ padding: '12px 16px' }}>
-                          <div style={{ display: 'flex', gap: 6 }}>
-                            <button
-                              onClick={() => setSelectedBill(bill)}
-                              style={{
-                                padding: '3px 10px', border: '1.5px solid var(--border)', borderRadius: 6,
-                                background: 'transparent', fontSize: 11, color: 'var(--ink3)', cursor: 'pointer',
-                                fontFamily: "'Geist', sans-serif",
-                              }}
-                            >View</button>
-                            <button
-                              onClick={() => api.post(`/billing/${bill.id}/send-whatsapp`, {})}
-                              style={{
-                                padding: '3px 10px', border: '1.5px solid var(--border)', borderRadius: 6,
-                                background: 'transparent', fontSize: 11, color: 'var(--ink3)', cursor: 'pointer',
-                                fontFamily: "'Geist', sans-serif",
-                              }}
-                            >Resend</button>
-                          </div>
+                  </thead>
+                  <tbody>
+                    {billsLoading ? (
+                      [...Array(5)].map((_, i) => (
+                        <tr key={i}><td colSpan={9} style={{ padding: '12px 14px' }}><Skeleton h={18} /></td></tr>
+                      ))
+                    ) : filteredBills.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} style={{ padding: '48px 16px', textAlign: 'center', ...sans, fontSize: 13, color: 'var(--ink4)' }}>
+                          No bills found for {MONTH_NAMES[month - 1]} {year}
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                    ) : filteredBills.map(bill => {
+                      const totalPaid = bill.payments.filter(p => p.status === 'PAID').reduce((s, p) => s + Number(p.amount), 0);
+                      const isSelected = selectedBillId === bill.id;
+                      return (
+                        <tr
+                          key={bill.id}
+                          onClick={() => setSelectedBillId(isSelected ? null : bill.id)}
+                          style={{
+                            borderBottom: '1px solid var(--border)', cursor: 'pointer',
+                            background: isSelected ? 'var(--accent-bg, #EFF6FF)' : 'transparent',
+                          }}
+                          onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--paper2)'; }}
+                          onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <td style={{ padding: '11px 14px' }}>
+                            <span style={{ ...mono, fontSize: 12, color: 'var(--ink3)' }} title={bill.invoice_number}>
+                              {bill.invoice_number.split('-').pop()}
+                            </span>
+                          </td>
+                          <td style={{ padding: '11px 14px', ...sans, fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>
+                            {formatDate(bill.invoice_date)}
+                          </td>
+                          <td style={{ padding: '11px 14px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ ...mono, fontSize: 12, color: 'var(--ink)', fontWeight: 600 }}>
+                                #{String(bill.order?.order_number ?? 0).padStart(2, '0')}
+                              </span>
+                              {bill.order?.table && (
+                                <span style={{
+                                  ...sans, fontSize: 11, background: 'var(--amber-bg)', color: 'var(--amber)',
+                                  padding: '1px 6px', borderRadius: 100, fontWeight: 500,
+                                }}>
+                                  {bill.order.table.name}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ padding: '11px 14px', ...sans, fontSize: 13, color: 'var(--ink)' }}>
+                            {bill.customer_name || '—'}
+                          </td>
+                          <td style={{ padding: '11px 14px', ...mono, fontSize: 13, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap' }}>
+                            {formatINR(Number(bill.total_amount))}
+                          </td>
+                          <td style={{ padding: '11px 14px', ...mono, fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>
+                            {formatINR(Number(bill.cgst_amount) + Number(bill.sgst_amount))}
+                          </td>
+                          <td style={{ padding: '11px 14px' }}>
+                            {totalPaid > 0 ? (
+                              <span style={{ ...mono, fontSize: 12, color: '#15803D' }}>
+                                ✓ {formatINR(totalPaid)}
+                              </span>
+                            ) : (
+                              <span style={{ ...sans, fontSize: 12, color: 'var(--ink5)' }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '11px 14px' }}>
+                            <StatusBadge status={bill.status} />
+                          </td>
+                          <td style={{ padding: '11px 14px' }}>
+                            <span style={{ ...sans, fontSize: 12, color: 'var(--accent)' }}>
+                              {isSelected ? 'Close ×' : 'View →'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-          {/* Invoice preview */}
-          {selectedBill && (
-            <InvoicePreview
-              bill={selectedBill}
-              restaurant={restaurant}
-              onClose={() => setSelectedBill(null)}
-            />
-          )}
-        </div>
+              {/* Pagination hint */}
+              {billsRes && billsRes.total > bills.length && (
+                <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)', ...sans, fontSize: 12, color: 'var(--ink4)' }}>
+                  Showing {bills.length} of {billsRes.total} bills
+                </div>
+              )}
+            </div>
+
+            {/* Invoice panel */}
+            {selectedBillId && (
+              <InvoicePanel
+                billId={selectedBillId}
+                restaurant={restaurant}
+                onClose={() => setSelectedBillId(null)}
+                onRefetch={refetchBills}
+              />
+            )}
+          </div>
+        )}
+
+        {/* ── Unbilled Orders Tab ── */}
+        {activeTab === 'unbilled' && (
+          <UnbilledOrdersTab
+            onBillGenerated={() => {
+              refetchBills();
+              setActiveTab('bills');
+            }}
+          />
+        )}
       </div>
     </>
   );

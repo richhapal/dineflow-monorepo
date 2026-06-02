@@ -75,7 +75,7 @@ export class BillingService {
   }
 
   async getBills(restaurantId: string, filters: { page?: number; limit?: number; month?: number; year?: number } = {}) {
-    const { page = 1, limit = 20, month, year } = filters;
+    const { page = 1, limit = 50, month, year } = filters;
     const skip = (page - 1) * limit;
 
     const where: any = { restaurant_id: restaurantId };
@@ -86,11 +86,53 @@ export class BillingService {
     }
 
     const [bills, total] = await Promise.all([
-      this.prisma.bill.findMany({ where, orderBy: { invoice_date: 'desc' }, skip, take: limit }),
+      this.prisma.bill.findMany({
+        where,
+        orderBy: { invoice_date: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          order: {
+            select: {
+              order_number: true,
+              covers: true,
+              order_type: true,
+              table: { select: { id: true, name: true } },
+            },
+          },
+          payments: {
+            select: { id: true, method: true, amount: true, status: true, paid_at: true, upi_txn_id: true, notes: true },
+          },
+        },
+      }),
       this.prisma.bill.count({ where }),
     ]);
 
     return { bills, total, page, limit, pages: Math.ceil(total / limit) };
+  }
+
+  async getUnbilledOrders(restaurantId: string) {
+    return this.prisma.order.findMany({
+      where: {
+        restaurant_id: restaurantId,
+        status: 'COMPLETED',
+        bill: null,
+        deleted_at: null,
+      },
+      include: {
+        items: { where: { is_cancelled: false } },
+        table: { select: { id: true, name: true } },
+      },
+      orderBy: { completed_at: 'desc' },
+      take: 50,
+    });
+  }
+
+  async cancelBill(billId: string, restaurantId: string) {
+    const bill = await this.prisma.bill.findFirst({ where: { id: billId, restaurant_id: restaurantId } });
+    if (!bill) throw new NotFoundException('Bill not found');
+    if (bill.status === 'PAID') throw new BadRequestException('Cannot cancel a PAID bill');
+    return this.prisma.bill.update({ where: { id: billId }, data: { status: 'CANCELLED' } });
   }
 
   async getBill(id: string, restaurantId: string) {
