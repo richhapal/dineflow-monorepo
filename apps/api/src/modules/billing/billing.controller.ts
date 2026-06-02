@@ -70,6 +70,14 @@ export class BillingController {
     res.send(csv);
   }
 
+  // ⚠ Static routes MUST come before :id to avoid NestJS matching them as a param
+  @Get('unbilled-orders')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  getUnbilledOrders(@CurrentUser() user: any) {
+    return this.billingService.getUnbilledOrders(user.restaurant_id);
+  }
+
   @Get(':id')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
@@ -89,13 +97,6 @@ export class BillingController {
   @ApiBearerAuth()
   recordPayment(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: RecordPaymentDto) {
     return this.billingService.recordPayment(id, dto, user.restaurant_id);
-  }
-
-  @Get('unbilled-orders')
-  @UseGuards(JwtGuard)
-  @ApiBearerAuth()
-  getUnbilledOrders(@CurrentUser() user: any) {
-    return this.billingService.getUnbilledOrders(user.restaurant_id);
   }
 
   @Post(':id/cancel')

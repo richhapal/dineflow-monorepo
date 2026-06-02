@@ -20,7 +20,9 @@ export class BillingService {
       include: { items: { include: { addons: true } } },
     });
     if (!order) throw new NotFoundException('Order not found');
-    if (order.status !== 'COMPLETED') throw new BadRequestException('Order must be COMPLETED to generate bill');
+    if (!['SERVED', 'COMPLETED'].includes(order.status)) {
+      throw new BadRequestException('Order must be SERVED or COMPLETED to generate a bill');
+    }
 
     // Check if bill already exists
     const existingBill = await this.prisma.bill.findUnique({ where: { order_id: orderId } });
@@ -115,7 +117,7 @@ export class BillingService {
     return this.prisma.order.findMany({
       where: {
         restaurant_id: restaurantId,
-        status: 'COMPLETED',
+        status: { in: ['SERVED', 'COMPLETED'] as any[] },
         bill: null,
         deleted_at: null,
       },
