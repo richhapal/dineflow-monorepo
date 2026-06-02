@@ -27,7 +27,10 @@ import { SingleQRPanel } from '@/components/ordering/SingleQRPanel';
 
 const ALL_SECTION = '__ALL__';
 
+type TableTab = 'floor' | 'qrcodes';
+
 export default function TablesPage() {
+  const [activeTab, setActiveTab] = useState<TableTab>('floor');
   const qc = useQueryClient();
   const { showToast } = useToast();
   const restaurant = useDashboardStore((s) => s.restaurant);
@@ -207,14 +210,14 @@ export default function TablesPage() {
 
   // ─── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div style={{ padding: 28, maxWidth: 1400, margin: '0 auto' }}>
+    <div style={{ padding: '24px 28px 40px', maxWidth: 1400, margin: '0 auto' }}>
       {/* Page header */}
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'flex-start',
           justifyContent: 'space-between',
-          marginBottom: 24,
+          marginBottom: 20,
           flexWrap: 'wrap',
           gap: 12,
         }}
@@ -243,40 +246,45 @@ export default function TablesPage() {
           </p>
         </div>
 
+        {/* Context-aware action buttons */}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button
-            onClick={handleClearAll}
-            style={{
-              padding: '9px 16px',
-              border: '1.5px solid var(--border2)',
-              borderRadius: 8,
-              background: 'transparent',
-              fontFamily: "'Geist', sans-serif",
-              fontSize: 13,
-              color: 'var(--ink3)',
-              cursor: 'pointer',
-            }}
-          >
-            🧹 Clear all tables
-          </button>
-          <button
-            onClick={() => {
-              setEditingTable(null);
-              setShowAddModal(true);
-            }}
-            style={{
-              padding: '9px 16px',
-              border: '1.5px solid var(--border2)',
-              borderRadius: 8,
-              background: 'transparent',
-              fontFamily: "'Geist', sans-serif",
-              fontSize: 13,
-              color: 'var(--ink3)',
-              cursor: 'pointer',
-            }}
-          >
-            + Add table
-          </button>
+          {activeTab === 'floor' && (
+            <>
+              <button
+                onClick={handleClearAll}
+                style={{
+                  padding: '9px 16px',
+                  border: '1.5px solid var(--border2)',
+                  borderRadius: 8,
+                  background: 'transparent',
+                  fontFamily: "'Geist', sans-serif",
+                  fontSize: 13,
+                  color: 'var(--ink3)',
+                  cursor: 'pointer',
+                }}
+              >
+                🧹 Clear all tables
+              </button>
+              <button
+                onClick={() => {
+                  setEditingTable(null);
+                  setShowAddModal(true);
+                }}
+                style={{
+                  padding: '9px 16px',
+                  border: '1.5px solid var(--border2)',
+                  borderRadius: 8,
+                  background: 'transparent',
+                  fontFamily: "'Geist', sans-serif",
+                  fontSize: 13,
+                  color: 'var(--ink3)',
+                  cursor: 'pointer',
+                }}
+              >
+                + Add table
+              </button>
+            </>
+          )}
           <button
             onClick={() => setShowGenerateQR(true)}
             style={{
@@ -299,181 +307,185 @@ export default function TablesPage() {
         </div>
       </div>
 
-      {/* Floor plan card */}
-      <div
-        style={{
-          background: '#fff',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          padding: '20px 24px',
-          marginBottom: 20,
-        }}
-      >
+      {/* ── Tab bar ── */}
+      <div style={{
+        display: 'flex',
+        gap: 2,
+        borderBottom: '1px solid var(--border)',
+        marginBottom: 20,
+      }}>
+        {([
+          { id: 'floor' as TableTab, label: 'Floor Plan', icon: '🪑' },
+          { id: 'qrcodes' as TableTab, label: 'QR Codes', icon: '⬛', badge: qrCodes.length || undefined },
+        ]).map(({ id, label, icon, badge }) => {
+          const active = activeTab === id;
+          return (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              style={{
+                padding: '9px 18px',
+                border: 'none',
+                borderBottom: active ? '2px solid var(--ink)' : '2px solid transparent',
+                background: 'none',
+                cursor: 'pointer',
+                fontFamily: "'Geist', sans-serif",
+                fontSize: 13,
+                fontWeight: active ? 600 : 400,
+                color: active ? 'var(--ink)' : 'var(--ink4)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                transition: 'color 0.15s, border-color 0.15s',
+                marginBottom: -1,
+              }}
+            >
+              <span>{icon}</span>
+              <span>{label}</span>
+              {badge !== undefined && (
+                <span style={{
+                  background: active ? 'var(--ink)' : 'var(--paper3)',
+                  color: active ? '#fff' : 'var(--ink4)',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '1px 7px',
+                  borderRadius: 100,
+                  transition: 'background 0.15s, color 0.15s',
+                }}>
+                  {badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Floor Plan tab ── */}
+      {activeTab === 'floor' && (
         <div
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 16,
-            flexWrap: 'wrap',
-            gap: 8,
+            background: '#fff',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '20px 24px',
           }}
         >
-          <span
+          <div
             style={{
-              fontFamily: "'Geist', sans-serif",
-              fontWeight: 600,
-              fontSize: 14,
-              color: 'var(--ink)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 16,
+              flexWrap: 'wrap',
+              gap: 8,
             }}
           >
-            Floor plan
-          </span>
-          {/* Table count by status */}
-          <div style={{ display: 'flex', gap: 10 }}>
-            {([
-              [TableStatus.AVAILABLE, 'var(--green)'],
-              [TableStatus.OCCUPIED, 'var(--amber)'],
-              [TableStatus.BILL_REQUESTED, '#c85a00'],
-              [TableStatus.RESERVED, 'var(--blue)'],
-              [TableStatus.CLEANING, 'var(--ink4)'],
-            ] as [TableStatus, string][]).map(([status, color]) => {
-              const count = tables.filter((t) => t.status === status).length;
-              if (count === 0) return null;
-              return (
-                <span
-                  key={status}
-                  style={{
-                    fontFamily: "'Geist', sans-serif",
-                    fontSize: 12,
-                    color,
-                  }}
-                >
-                  {count}{' '}
-                  {status === TableStatus.BILL_REQUESTED
-                    ? 'billing'
-                    : status.toLowerCase()}
-                </span>
-              );
-            })}
+            <span
+              style={{
+                fontFamily: "'Geist', sans-serif",
+                fontWeight: 600,
+                fontSize: 14,
+                color: 'var(--ink)',
+              }}
+            >
+              Floor plan
+            </span>
+            {/* Table count by status */}
+            <div style={{ display: 'flex', gap: 10 }}>
+              {([
+                [TableStatus.AVAILABLE, 'var(--green)'],
+                [TableStatus.OCCUPIED, 'var(--amber)'],
+                [TableStatus.BILL_REQUESTED, '#c85a00'],
+                [TableStatus.RESERVED, 'var(--blue)'],
+                [TableStatus.CLEANING, 'var(--ink4)'],
+              ] as [TableStatus, string][]).map(([status, color]) => {
+                const count = tables.filter((t) => t.status === status).length;
+                if (count === 0) return null;
+                return (
+                  <span
+                    key={status}
+                    style={{ fontFamily: "'Geist', sans-serif", fontSize: 12, color }}
+                  >
+                    {count}{' '}
+                    {status === TableStatus.BILL_REQUESTED ? 'billing' : status.toLowerCase()}
+                  </span>
+                );
+              })}
+            </div>
           </div>
-        </div>
 
-        {/* Wrap cards in positioned containers to hold refs */}
-        <div style={{ position: 'relative' }}>
-          {/* FloorPlan renders the grid */}
-          {tablesLoading ? (
+          <div style={{ position: 'relative' }}>
             <FloorPlan
-              tables={[]}
+              tables={tablesLoading ? [] : tables}
               selectedSection={selectedSection}
               onSectionChange={setSelectedSection}
               onTableClick={handleTableClick}
-              onEditTable={(t) => {
-                setEditingTable(t);
-                setShowAddModal(true);
-              }}
+              onEditTable={(t) => { setEditingTable(t); setShowAddModal(true); }}
               onDeleteTable={setDeletingTable}
               onStatusChange={handleStatusChange}
-              onAddTable={() => {
-                setEditingTable(null);
-                setShowAddModal(true);
-              }}
+              onAddTable={() => { setEditingTable(null); setShowAddModal(true); }}
               selectedTableId={popoverTable?.id ?? null}
               elapsedMap={elapsedMap}
               isLoading={tablesLoading}
             />
-          ) : (
-            <>
-              {/* Section filter + grid via FloorPlan */}
-              {/* We need refs on each card — render a wrapper grid ourselves */}
-              <FloorPlan
-                tables={tables}
-                selectedSection={selectedSection}
-                onSectionChange={setSelectedSection}
-                onTableClick={handleTableClick}
-                onEditTable={(t) => {
-                  setEditingTable(t);
-                  setShowAddModal(true);
-                }}
-                onDeleteTable={setDeletingTable}
-                onStatusChange={handleStatusChange}
-                onAddTable={() => {
-                  setEditingTable(null);
-                  setShowAddModal(true);
-                }}
-                selectedTableId={popoverTable?.id ?? null}
-                elapsedMap={elapsedMap}
-                isLoading={false}
-              />
-            </>
-          )}
-        </div>
+          </div>
 
-        {/* Legend */}
-        <div style={{ marginTop: 16 }}>
-          <StatusLegend />
+          <div style={{ marginTop: 16 }}>
+            <StatusLegend />
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* QR codes card */}
-      <div
-        style={{
-          background: '#fff',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          overflow: 'hidden',
-        }}
-      >
-        {/* Card header */}
-        <div
-          style={{
-            padding: '16px 20px',
-            borderBottom: '1px solid var(--border)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-          }}
-        >
-          <span
+      {/* ── QR Codes tab ── */}
+      {activeTab === 'qrcodes' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* QR codes table card */}
+          <div
             style={{
-              fontFamily: "'Geist', sans-serif",
-              fontWeight: 600,
-              fontSize: 14,
-              color: 'var(--ink)',
+              background: '#fff',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg)',
+              overflow: 'hidden',
             }}
           >
-            QR codes
-          </span>
-          <span
-            style={{
-              background: 'var(--paper3)',
-              color: 'var(--ink4)',
-              fontSize: 11,
-              fontWeight: 600,
-              padding: '2px 8px',
-              borderRadius: 100,
-              fontFamily: "'Geist', sans-serif",
-            }}
-          >
-            {qrCodes.length}
-          </span>
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: '1px solid var(--border)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              <span style={{ fontFamily: "'Geist', sans-serif", fontWeight: 600, fontSize: 14, color: 'var(--ink)' }}>
+                QR codes
+              </span>
+              <span style={{
+                background: 'var(--paper3)',
+                color: 'var(--ink4)',
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '2px 8px',
+                borderRadius: 100,
+                fontFamily: "'Geist', sans-serif",
+              }}>
+                {qrCodes.length}
+              </span>
+            </div>
+
+            <QRCodesTable
+              qrCodes={qrCodes}
+              isLoading={qrLoading}
+              onViewQR={(id) => setQrViewId(id)}
+              onGenerateQR={() => setShowGenerateQR(true)}
+              onRegenerate={(_id) => setShowGenerateQR(true)}
+            />
+          </div>
+
+          {/* Single QR panel */}
+          <SingleQRPanel />
         </div>
-
-        <QRCodesTable
-          qrCodes={qrCodes}
-          isLoading={qrLoading}
-          onViewQR={(id) => setQrViewId(id)}
-          onGenerateQR={() => setShowGenerateQR(true)}
-          onRegenerate={(_id) => {
-            setShowGenerateQR(true);
-          }}
-        />
-      </div>
-
-      {/* ─── Single QR Code ───────────────────────────────────────────────────── */}
-      <div style={{ padding: '0 28px 32px' }}>
-        <SingleQRPanel />
-      </div>
+      )}
 
       {/* ─── Popovers & Modals ───────────────────────────────────────────────── */}
 

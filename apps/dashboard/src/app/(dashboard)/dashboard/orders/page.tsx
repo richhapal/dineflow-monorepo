@@ -329,7 +329,7 @@ function ModifyOrderModal({
               Modify order
             </h3>
             <p style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: 'var(--ink4)' }}>
-              #{order.id.slice(-8).toUpperCase()} · {order.customer_name || 'Guest'}
+              #{String(order.order_number ?? 0).padStart(2, '0')} · {order.customer_name || 'Guest'}
             </p>
           </div>
           <button
@@ -592,7 +592,7 @@ function OrderCard({
             fontFamily: "'Geist Mono', monospace", fontSize: 12,
             color: 'var(--ink3)', fontWeight: 600, letterSpacing: '.02em',
           }}>
-            #{order.id.slice(-8).toUpperCase()}
+            #{String(order.order_number ?? 0).padStart(2, '0')}
           </span>
 
           {/* Order type pill */}
@@ -754,26 +754,73 @@ function OrderCard({
         </div>
 
         {/* ── Bill breakdown (GST / service charge) ── */}
-        {(Number(order.cgst_amount) > 0 || Number(order.service_charge) > 0) && (
-          <div style={{
-            background: 'var(--paper2)', borderRadius: 6, padding: '6px 10px',
-            marginBottom: 8, display: 'flex', flexWrap: 'wrap' as const, gap: '4px 14px',
-          }}>
-            <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)' }}>
-              Subtotal ₹{Number(order.subtotal).toFixed(0)}
-            </span>
-            {Number(order.cgst_amount) > 0 && (
-              <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)' }}>
-                GST ₹{(Number(order.cgst_amount) + Number(order.sgst_amount)).toFixed(0)}
-              </span>
-            )}
-            {Number(order.service_charge) > 0 && (
-              <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)' }}>
-                Service ₹{Number(order.service_charge).toFixed(0)}
-              </span>
-            )}
-          </div>
-        )}
+        {(Number(order.cgst_amount) > 0 || Number(order.service_charge) > 0) && (() => {
+          const subtotal = Number(order.subtotal);
+          const cgst = Number(order.cgst_amount);
+          const sgst = Number(order.sgst_amount);
+          const svc = Number(order.service_charge);
+          const gstPct = subtotal > 0 ? Math.round((cgst + sgst) / subtotal * 100) : 0;
+          return (
+            <div style={{
+              background: 'var(--paper2)', borderRadius: 6, padding: '7px 10px',
+              marginBottom: 8, borderTop: '1px solid var(--border)',
+            }}>
+              {/* Subtotal row */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)' }}>
+                  Subtotal
+                </span>
+                <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: 'var(--ink4)' }}>
+                  ₹{subtotal.toFixed(2)}
+                </span>
+              </div>
+              {/* GST row */}
+              {cgst > 0 && (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                    <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)' }}>
+                      CGST ({gstPct / 2}%)
+                    </span>
+                    <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: 'var(--ink4)' }}>
+                      ₹{cgst.toFixed(2)}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                    <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)' }}>
+                      SGST ({gstPct / 2}%)
+                    </span>
+                    <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: 'var(--ink4)' }}>
+                      ₹{sgst.toFixed(2)}
+                    </span>
+                  </div>
+                </>
+              )}
+              {/* Service charge row */}
+              {svc > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                  <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)' }}>
+                    Service charge
+                  </span>
+                  <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: 'var(--ink4)' }}>
+                    ₹{svc.toFixed(2)}
+                  </span>
+                </div>
+              )}
+              {/* Total row */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between',
+                borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 4,
+              }}>
+                <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>
+                  Total {gstPct > 0 && <span style={{ fontWeight: 400, color: 'var(--ink4)', fontSize: 10 }}>(incl. {gstPct}% GST)</span>}
+                </span>
+                <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, fontWeight: 700, color: 'var(--ink)' }}>
+                  ₹{Number(order.total_amount).toFixed(2)}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Timeout countdown (PENDING only) ── */}
         {isPending && (

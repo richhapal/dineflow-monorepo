@@ -840,6 +840,7 @@ model Order {
   order_session_id String?              // human-readable "ORD-4821"
   queue_position  Int?                 // position in queue when placed
   seat_identifier String?              // "Table 7", "Bar Seat 2" — customer-entered
+  order_number    Int?                 // daily sequential per restaurant: 1, 2, 3… resets midnight
   decline_reason  String?              // set when owner declines or auto-cancel fires
 
   // ── Waiter modification ───────────────────────────────────────

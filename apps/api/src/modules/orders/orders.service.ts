@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
@@ -24,6 +25,8 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly gateway: WebsocketGateway,
@@ -94,9 +97,22 @@ export class OrdersService {
 
     // 6. Create order in transaction
     const order = await this.prisma.$transaction(async (tx) => {
+      // Assign a daily sequential order number (per restaurant, resets at midnight)
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayCount = await tx.order.count({
+        where: {
+          restaurant_id: restaurantId,
+          created_at: { gte: todayStart },
+          deleted_at: null,
+        },
+      });
+      const orderNumber = todayCount + 1;
+
       const newOrder = await tx.order.create({
         data: {
           restaurant_id: restaurantId,
+          order_number: orderNumber,
           table_id: dto.table_id,
           room_id: dto.room_id,
           order_type: dto.order_type as any,
@@ -448,6 +464,7 @@ export class OrdersService {
       select: {
         id: true,
         status: true,
+        order_number: true,
         total_amount: true,
         created_at: true,
         decline_reason: true,
@@ -517,15 +534,20 @@ export class OrdersService {
     // 5. Delegate to create() for price calculation, GST, DB write
     const order = await this.create(orderDto, restaurant.id);
 
-    // 6. Patch in the queue fields
-    await this.prisma.order.update({
-      where: { id: order.id },
-      data: {
-        order_session_id: sessionId,
-        queue_position: queuePosition,
-        seat_identifier: dto.seat_identifier || null,
-      },
-    });
+    // 6. Patch in the queue fields — non-blocking: never fail the order response if this errors
+    try {
+      await this.prisma.order.update({
+        where: { id: order.id },
+        data: {
+          order_session_id: sessionId,
+          queue_position: queuePosition,
+          seat_identifier: dto.seat_identifier || null,
+        },
+      });
+    } catch (updateErr: any) {
+      this.logger.error(`createFromSingleQR: failed to patch queue fields on order ${order.id}: ${updateErr?.message}`);
+      // Continue — order was already created successfully; queue fields are non-critical
+    }
 
     // 7. Enqueue in BullMQ + Redis — fire-and-forget (never block the order response)
     this.queueService.enqueueOrder({
@@ -546,10 +568,16 @@ export class OrdersService {
     }).catch(() => {/* non-critical */});
 
     return {
-      ...order,
+      id: order.id,
+      status: order.status,
+      order_number: (order as any).order_number ?? null,
       order_session_id: sessionId,
       queue_position: queuePosition,
       seat_identifier: dto.seat_identifier || null,
+      total_amount: order.total_amount,
+      decline_reason: order.decline_reason,
+      items: order.items,
+      created_at: order.created_at,
     };
   }
 

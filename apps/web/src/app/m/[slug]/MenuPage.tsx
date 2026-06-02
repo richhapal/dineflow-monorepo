@@ -73,6 +73,7 @@ interface MenuData {
 interface OrderStatus {
   id: string;
   status: string;
+  order_number?: number | null;
   total_amount: number;
   created_at: string;
   decline_reason?: string | null;
@@ -1182,7 +1183,7 @@ function OrderStatusScreen({
           {statusInfo.label}
         </h2>
         <p style={{ fontSize: 12, color: 'var(--ink4)', fontFamily: 'monospace' }}>
-          Order #{order.id.slice(-8).toUpperCase()}
+          Order #{String(order.order_number ?? 0).padStart(2, '0')}
         </p>
 
         {/* Decline / auto-cancel reason */}

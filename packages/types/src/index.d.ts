@@ -182,6 +182,7 @@ export interface Order {
     covers: number;
     notes?: string;
     idempotency_key: string;
+    order_number?: number | null;
     subtotal: number;
     cgst_amount: number;
     sgst_amount: number;

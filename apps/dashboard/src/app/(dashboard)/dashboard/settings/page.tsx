@@ -672,9 +672,10 @@ function OrderingSection({ data, onRefetch }: { data: RestaurantSettings; onRefe
 // ─── Section: Payments & Tax ──────────────────────────────────────────────────
 
 function PaymentsSection({ data, onRefetch }: { data: RestaurantSettings; onRefetch: () => void }) {
+  // API stores gst_rate as a decimal (0.05 = 5%). Convert to percentage for the UI dropdown.
   const [form, setForm] = useState({
     upi_id: data.upi_id || '',
-    gst_rate: String(data.gst_rate ?? 0),
+    gst_rate: String(Math.round((data.gst_rate ?? 0) * 100)),
   });
   const [saved, setSaved] = useState(false);
 
@@ -717,7 +718,8 @@ function PaymentsSection({ data, onRefetch }: { data: RestaurantSettings; onRefe
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 8 }}>
         <button
           onClick={() =>
-            mutation.mutate({ upi_id: form.upi_id, gst_rate: Number(form.gst_rate) })
+            // API expects decimal: 5% → 0.05
+            mutation.mutate({ upi_id: form.upi_id, gst_rate: Number(form.gst_rate) / 100 })
           }
           disabled={mutation.isPending}
           style={{ ...saveButtonStyle, opacity: mutation.isPending ? 0.6 : 1 }}
@@ -905,18 +907,18 @@ function HolidaysSection({ data, onRefetch }: { data: RestaurantSettings; onRefe
 
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 
-type Tab = 'info' | 'hours' | 'ordering' | 'payments' | 'holidays';
+type SettingsTab = 'info' | 'hours' | 'ordering' | 'payments' | 'holidays';
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'info', label: 'Restaurant Info' },
-  { id: 'hours', label: 'Business Hours' },
-  { id: 'ordering', label: 'Ordering Settings' },
-  { id: 'payments', label: 'Payments & Tax' },
-  { id: 'holidays', label: 'Holidays' },
+const SETTINGS_TABS: { id: SettingsTab; label: string; icon: string }[] = [
+  { id: 'info',     label: 'Restaurant Info',    icon: '🏪' },
+  { id: 'hours',    label: 'Business Hours',      icon: '🕐' },
+  { id: 'ordering', label: 'Ordering',            icon: '📋' },
+  { id: 'payments', label: 'Payments & Tax',      icon: '💳' },
+  { id: 'holidays', label: 'Holidays',            icon: '📅' },
 ];
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('info');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('info');
   const queryClient = useQueryClient();
 
   const { data, isLoading, isError } = useQuery<RestaurantSettings>({
@@ -930,29 +932,17 @@ export default function SettingsPage() {
 
   if (isLoading) {
     return (
-      <div style={{ display: 'flex', height: 'calc(100vh - 56px)' }}>
-        {/* Sidebar skeleton */}
-        <div style={{ width: 200, borderRight: '1px solid var(--border)', background: '#fff', padding: '24px 16px' }}>
-          {[1, 2, 3, 4, 5].map(i => (
-            <div
-              key={i}
-              style={{
-                height: 14,
-                borderRadius: 4,
-                background: 'var(--paper3)',
-                marginBottom: 20,
-                width: i === 2 ? '80%' : i === 4 ? '70%' : '90%',
-              }}
-            />
+      <div style={{ padding: '28px 32px' }}>
+        <div style={{ height: 28, width: 140, borderRadius: 6, background: 'var(--paper3)', marginBottom: 28 }} />
+        {/* Tab bar skeleton */}
+        <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 28 }}>
+          {[100, 120, 90, 120, 80].map((w, i) => (
+            <div key={i} style={{ width: w, height: 36, borderRadius: 6, background: 'var(--paper3)', marginBottom: 8 }} />
           ))}
         </div>
-        {/* Content skeleton */}
-        <div style={{ flex: 1, padding: 28 }}>
-          <div style={{ height: 24, width: 120, borderRadius: 6, background: 'var(--paper3)', marginBottom: 28 }} />
-          {[1, 2, 3, 4].map(i => (
-            <div key={i} style={{ height: 14, borderRadius: 4, background: 'var(--paper3)', marginBottom: 16, width: i === 3 ? '60%' : '100%' }} />
-          ))}
-        </div>
+        {[1, 2, 3, 4].map(i => (
+          <div key={i} style={{ height: 14, borderRadius: 4, background: 'var(--paper3)', marginBottom: 16, width: i === 3 ? '60%' : '100%' }} />
+        ))}
       </div>
     );
   }
@@ -969,91 +959,70 @@ export default function SettingsPage() {
 
   return (
     <>
-      <style>{`
-        @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
-      `}</style>
-      <div style={{ display: 'flex', minHeight: 'calc(100vh - 56px)' }}>
-        {/* ── Left sidebar ── */}
-        <nav style={{
-          width: 200,
-          flexShrink: 0,
-          background: '#fff',
-          borderRight: '1px solid var(--border)',
-          padding: '20px 0',
-        }}>
-          {TABS.map(tab => {
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '10px 18px',
-                  fontSize: 14,
-                  fontFamily: "'Geist', sans-serif",
-                  fontWeight: isActive ? 600 : 400,
-                  color: isActive ? 'var(--accent)' : 'var(--ink3)',
-                  background: isActive ? 'var(--accent-bg, #f0faf4)' : 'transparent',
-                  cursor: 'pointer',
-                  border: 'none',
-                  borderLeft: isActive ? '3px solid var(--accent)' : '3px solid transparent',
-                  transition: 'background 0.15s, color 0.15s',
-                  display: 'block',
-                }}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </nav>
+      <style>{`@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }`}</style>
 
-        {/* ── Content area ── */}
-        <div style={{ flex: 1, padding: '28px 32px', background: 'var(--paper, #fafaf9)', overflowY: 'auto' }}>
-          <div style={{ maxWidth: 640 }}>
-            {/* Page title */}
-            <h1 style={{
-              fontFamily: "'Instrument Serif', serif",
-              fontStyle: 'italic',
-              fontSize: 28,
-              color: 'var(--ink)',
-              marginBottom: 28,
-            }}>
-              Settings
-            </h1>
+      <div style={{ padding: '28px 32px', background: 'var(--paper, #fafaf9)', minHeight: 'calc(100vh - 56px)' }}>
+        <div style={{ maxWidth: 700 }}>
 
-            {/* Tab content */}
-            {activeTab === 'info' && (
-              <div style={{ background: '#fff', borderRadius: 'var(--radius-lg, 12px)', border: '1px solid var(--border)', padding: '24px' }}>
-                <RestaurantInfoSection data={data} onRefetch={refetch} />
-              </div>
-            )}
+          {/* Page title */}
+          <h1 style={{
+            fontFamily: "'Instrument Serif', serif",
+            fontStyle: 'italic',
+            fontSize: 28,
+            color: 'var(--ink)',
+            marginBottom: 20,
+          }}>
+            Settings
+          </h1>
 
-            {activeTab === 'hours' && (
-              <div style={{ background: '#fff', borderRadius: 'var(--radius-lg, 12px)', border: '1px solid var(--border)', padding: '24px' }}>
-                <BusinessHoursSection data={data} onRefetch={refetch} />
-              </div>
-            )}
-
-            {activeTab === 'ordering' && (
-              <div style={{ background: '#fff', borderRadius: 'var(--radius-lg, 12px)', border: '1px solid var(--border)', padding: '24px' }}>
-                <OrderingSection data={data} onRefetch={refetch} />
-              </div>
-            )}
-
-            {activeTab === 'payments' && (
-              <div style={{ background: '#fff', borderRadius: 'var(--radius-lg, 12px)', border: '1px solid var(--border)', padding: '24px' }}>
-                <PaymentsSection data={data} onRefetch={refetch} />
-              </div>
-            )}
-
-            {activeTab === 'holidays' && (
-              <div style={{ background: '#fff', borderRadius: 'var(--radius-lg, 12px)', border: '1px solid var(--border)', padding: '24px' }}>
-                <HolidaysSection data={data} onRefetch={refetch} />
-              </div>
-            )}
+          {/* ── Tab bar ── */}
+          <div style={{
+            display: 'flex',
+            gap: 2,
+            borderBottom: '1px solid var(--border)',
+            marginBottom: 24,
+            overflowX: 'auto',
+          }}>
+            {SETTINGS_TABS.map(({ id, label, icon }) => {
+              const active = activeTab === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => setActiveTab(id)}
+                  style={{
+                    padding: '9px 16px',
+                    border: 'none',
+                    borderBottom: active ? '2px solid var(--ink)' : '2px solid transparent',
+                    background: 'none',
+                    cursor: 'pointer',
+                    fontFamily: "'Geist', sans-serif",
+                    fontSize: 13,
+                    fontWeight: active ? 600 : 400,
+                    color: active ? 'var(--ink)' : 'var(--ink4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    whiteSpace: 'nowrap',
+                    transition: 'color 0.15s, border-color 0.15s',
+                    marginBottom: -1,
+                  }}
+                >
+                  <span>{icon}</span>
+                  <span>{label}</span>
+                </button>
+              );
+            })}
           </div>
+
+          {/* ── Tab content ── */}
+          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid var(--border)', padding: '24px' }}>
+            {activeTab === 'info'     && <RestaurantInfoSection data={data} onRefetch={refetch} />}
+            {activeTab === 'hours'    && <BusinessHoursSection  data={data} onRefetch={refetch} />}
+            {activeTab === 'ordering' && <OrderingSection       data={data} onRefetch={refetch} />}
+            {activeTab === 'payments' && <PaymentsSection       data={data} onRefetch={refetch} />}
+            {activeTab === 'holidays' && <HolidaysSection       data={data} onRefetch={refetch} />}
+          </div>
+
         </div>
       </div>
     </>

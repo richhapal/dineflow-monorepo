@@ -242,7 +242,7 @@ export default function TablePopover({
                 letterSpacing: '.06em',
               }}
             >
-              Order #{order.id.slice(-6).toUpperCase()}
+              Order #{String(order.order_number ?? 0).padStart(2, '0')}
             </p>
 
             {/* Items */}
