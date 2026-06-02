@@ -68,8 +68,9 @@ export class OrdersController {
     @Query('status') status?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('tableId') tableId?: string,
   ) {
-    return this.ordersService.findAll(user.restaurant_id, status, from, to);
+    return this.ordersService.findAll(user.restaurant_id, status, from, to, tableId);
   }
 
   @Get(':id')

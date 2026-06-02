@@ -71,6 +71,17 @@ export class BillingController {
   }
 
   // ⚠ Static routes MUST come before :id to avoid NestJS matching them as a param
+  @Post('checkout-table/:tableId')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  checkoutTable(
+    @CurrentUser() user: any,
+    @Param('tableId') tableId: string,
+    @Body() body: { payment_method: string },
+  ) {
+    return this.billingService.checkoutTable(tableId, user.restaurant_id, body.payment_method);
+  }
+
   @Get('unbilled-orders')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

@@ -174,7 +174,7 @@ export class OrdersService {
     return order;
   }
 
-  async findAll(restaurantId: string, status?: string, from?: string, to?: string) {
+  async findAll(restaurantId: string, status?: string, from?: string, to?: string, tableId?: string) {
     // When a date range is supplied, show ALL statuses (historical view).
     // Without a range, default to active orders only (live kitchen view).
     const hasDateFilter = !!(from || to);
@@ -197,6 +197,7 @@ export class OrdersService {
       where: {
         restaurant_id: restaurantId,
         deleted_at: null,
+        ...(tableId ? { table_id: tableId } : {}),
         ...statusFilter,
         ...dateFilter,
       },

@@ -130,6 +130,44 @@ export class BillingService {
     });
   }
 
+  async checkoutTable(tableId: string, restaurantId: string, paymentMethod: string) {
+    // Find all SERVED/COMPLETED orders at this table that don't have a bill yet
+    const orders = await this.prisma.order.findMany({
+      where: {
+        table_id: tableId,
+        restaurant_id: restaurantId,
+        status: { in: ['SERVED', 'COMPLETED'] as any[] },
+        bill: null,
+        deleted_at: null,
+      },
+      include: { items: { include: { addons: true } } },
+    });
+
+    if (orders.length === 0) {
+      throw new BadRequestException('No unbilled served orders at this table');
+    }
+
+    // Generate a bill per order (handles idempotency — skips if already exists)
+    const bills = await Promise.all(orders.map(o => this.generateBill(o.id, restaurantId)));
+
+    // Record payment for each bill
+    await Promise.all(bills.map(bill =>
+      this.recordPayment(bill.id, {
+        method: paymentMethod as any,
+        amount: Number(bill.total_amount),
+      }, restaurantId),
+    ));
+
+    // Mark all orders as COMPLETED
+    await this.prisma.order.updateMany({
+      where: { id: { in: orders.map(o => o.id) } },
+      data: { status: 'COMPLETED' as any },
+    });
+
+    const totalAmount = bills.reduce((sum, b) => sum + Number(b.total_amount), 0);
+    return { bills, totalAmount, orderCount: orders.length };
+  }
+
   async cancelBill(billId: string, restaurantId: string) {
     const bill = await this.prisma.bill.findFirst({ where: { id: billId, restaurant_id: restaurantId } });
     if (!bill) throw new NotFoundException('Bill not found');

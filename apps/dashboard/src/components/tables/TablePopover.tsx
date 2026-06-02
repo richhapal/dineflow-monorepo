@@ -1,10 +1,8 @@
 'use client';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { TableStatus, PaymentMethod } from '@dineflow/types';
 import { formatINR } from '@dineflow/utils';
 import { RestaurantTable } from './useTablesQR';
 import { api } from '@/lib/api';
-import { Order } from '@dineflow/types';
 import { useToast } from '@/components/ui/Toast';
 
 interface TablePopoverProps {
@@ -14,12 +12,35 @@ interface TablePopoverProps {
   onStatusChanged: () => void;
 }
 
-const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
-  { value: PaymentMethod.UPI, label: 'UPI' },
-  { value: PaymentMethod.CASH, label: 'Cash' },
-  { value: PaymentMethod.CARD, label: 'Card' },
-  { value: PaymentMethod.ONLINE, label: 'Online' },
-  { value: PaymentMethod.COMPLIMENTARY, label: 'Complimentary' },
+interface OrderItem {
+  id: string;
+  item_name: string;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+  is_cancelled: boolean;
+}
+
+interface TableOrder {
+  id: string;
+  order_number?: number | null;
+  status: string;
+  customer_name?: string | null;
+  covers: number;
+  subtotal: number;
+  cgst_amount: number;
+  sgst_amount: number;
+  service_charge: number;
+  total_amount: number;
+  items: OrderItem[];
+  created_at: string;
+}
+
+const PAYMENT_METHODS = [
+  { value: 'CASH',          label: '💵 Cash' },
+  { value: 'UPI',           label: '📱 UPI' },
+  { value: 'CARD',          label: '💳 Card' },
+  { value: 'COMPLIMENTARY', label: '🎁 Comp' },
 ];
 
 export default function TablePopover({
@@ -30,448 +51,309 @@ export default function TablePopover({
 }: TablePopoverProps) {
   const { showToast } = useToast();
   const popoverRef = useRef<HTMLDivElement>(null);
-  const [order, setOrder] = useState<Order | null | undefined>(undefined); // undefined = loading
-  const [billId, setBillId] = useState<string | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
-    PaymentMethod.UPI,
-  );
-  const [loading, setLoading] = useState(false);
 
-  // Fetch active order
-  useEffect(() => {
-    if (!table.current_order_id) {
-      setOrder(null);
-      return;
-    }
-    api
-      .get('/orders', {
-        params: { tableId: table.id, status: 'active' },
+  const [orders, setOrders] = useState<TableOrder[] | null | undefined>(undefined); // undefined=loading
+  const [paymentMethod, setPaymentMethod] = useState('CASH');
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState<{ totalAmount: number; orderCount: number } | null>(null);
+
+  // ── Fetch all non-completed orders for this table ──────────────────────────
+  const fetchOrders = useCallback(() => {
+    setOrders(undefined);
+    api.get('/orders', { params: { tableId: table.id } })
+      .then(r => {
+        const all: TableOrder[] = r.data;
+        // Show SERVED orders (ready to bill) + any still in progress
+        setOrders(all.length ? all : null);
       })
-      .then((r) => {
-        const orders: Order[] = r.data;
-        setOrder(orders[0] ?? null);
-      })
-      .catch(() => setOrder(null));
-  }, [table.id, table.current_order_id]);
+      .catch(() => setOrders(null));
+  }, [table.id]);
+
+  useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
   // Close on Escape
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
-    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Viewport-aware positioning
-  const style = useCallback((): React.CSSProperties => {
+  // ── Viewport-aware position ────────────────────────────────────────────────
+  const popStyle = useCallback((): React.CSSProperties => {
     const W = window.innerWidth;
     const H = window.innerHeight;
-    const popW = 320;
-    const popH = 380;
-    let left = anchorRect.right + 8;
-    let top = anchorRect.top;
-
-    if (left + popW > W - 8) left = anchorRect.left - popW - 8;
-    if (top + popH > H - 8) top = H - popH - 8;
+    const popW = 340;
+    const popH = 520;
+    let left = anchorRect.right + 10;
+    let top  = anchorRect.top;
+    if (left + popW > W - 8) left = anchorRect.left - popW - 10;
+    if (top + popH > H - 8) top  = H - popH - 8;
     if (top < 8) top = 8;
-
     return {
-      position: 'fixed',
-      left,
-      top,
-      width: popW,
-      zIndex: 100,
-      background: '#fff',
-      border: '1px solid var(--border)',
-      borderRadius: 12,
-      boxShadow: '0 8px 32px rgba(0,0,0,.12)',
-      padding: 20,
+      position: 'fixed', left, top, width: popW, zIndex: 100,
+      background: '#fff', border: '1px solid var(--border)',
+      borderRadius: 14, boxShadow: '0 12px 40px rgba(0,0,0,.14)',
+      overflow: 'hidden',
     };
   }, [anchorRect]);
 
-  async function handleGenerateBill() {
-    if (!order) return;
-    setLoading(true);
-    try {
-      const r = await api.post(`/billing/generate/${order.id}`);
-      setBillId(r.data?.id ?? r.data?.bill_id ?? r.data);
-      showToast({ type: 'success', title: 'Bill generated' });
-    } catch {
-      showToast({ type: 'error', title: 'Failed to generate bill' });
-    } finally {
-      setLoading(false);
-    }
-  }
+  // ── Computed totals ────────────────────────────────────────────────────────
+  const servedOrders = orders?.filter(o => ['SERVED', 'COMPLETED'].includes(o.status)) ?? [];
+  const inProgressOrders = orders?.filter(o => !['SERVED', 'COMPLETED', 'CANCELLED'].includes(o.status)) ?? [];
 
-  async function handleMarkPaid() {
-    if (!order && !billId) return;
-    setLoading(true);
-    try {
-      const id = billId ?? order?.id;
-      await api.post(`/billing/${id}/payment`, { method: paymentMethod });
-      showToast({ type: 'success', title: 'Payment recorded', message: `Paid via ${paymentMethod}` });
-      onStatusChanged();
-      onClose();
-    } catch {
-      showToast({ type: 'error', title: 'Failed to record payment' });
-    } finally {
-      setLoading(false);
-    }
-  }
+  const combinedTotal    = servedOrders.reduce((s, o) => s + Number(o.total_amount), 0);
+  const combinedSubtotal = servedOrders.reduce((s, o) => s + Number(o.subtotal), 0);
+  const combinedGST      = servedOrders.reduce((s, o) => s + Number(o.cgst_amount) + Number(o.sgst_amount), 0);
+  const combinedService  = servedOrders.reduce((s, o) => s + Number(o.service_charge), 0);
+  const totalItems       = servedOrders.reduce((s, o) => s + o.items.filter(i => !i.is_cancelled).length, 0);
+
+  const canBill = servedOrders.length > 0 && !done;
 
   const elapsedMin = table.occupied_since
-    ? Math.floor(
-        (Date.now() - new Date(table.occupied_since).getTime()) / 60000,
-      )
+    ? Math.floor((Date.now() - new Date(table.occupied_since).getTime()) / 60000)
     : 0;
 
-  const isBillRequested = table.status === TableStatus.BILL_REQUESTED;
-  const isOccupied = table.status === TableStatus.OCCUPIED;
+  // ── Checkout: generate bills + record payment + complete orders ─────────────
+  async function handleCheckout() {
+    setLoading(true);
+    try {
+      const r = await api.post(`/billing/checkout-table/${table.id}`, {
+        payment_method: paymentMethod,
+      });
+      setDone({ totalAmount: r.data.totalAmount, orderCount: r.data.orderCount });
+      showToast({ type: 'success', title: `Bill paid · ${formatINR(r.data.totalAmount)}` });
+      onStatusChanged(); // refresh table grid
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || 'Checkout failed';
+      showToast({ type: 'error', title: msg });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const sans  = "'Geist', sans-serif";
+  const mono  = "'Geist Mono', monospace";
+  const serif = "'Instrument Serif', serif";
 
   return (
     <>
       {/* Backdrop */}
-      <div
-        style={{
-          position: 'fixed',
-          inset: 0,
-          zIndex: 99,
-          background: 'transparent',
-        }}
-        onClick={onClose}
-      />
+      <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={onClose} />
 
-      <div ref={popoverRef} style={style()}>
-        {/* Header */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            marginBottom: 14,
-          }}
-        >
+      <div ref={popoverRef} style={popStyle()}>
+
+        {/* ── Header ── */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '16px 18px 12px',
+          borderBottom: '1px solid var(--border)',
+        }}>
           <div>
-            <p
-              style={{
-                fontFamily: "'Geist', sans-serif",
-                fontWeight: 600,
-                fontSize: 15,
-                color: 'var(--ink)',
-                marginBottom: 2,
-              }}
-            >
+            <p style={{ fontFamily: sans, fontWeight: 700, fontSize: 15, color: 'var(--ink)', marginBottom: 2 }}>
               {table.name}
             </p>
-            <p
-              style={{
-                fontFamily: "'Geist', sans-serif",
-                fontSize: 12,
-                color: 'var(--ink4)',
-              }}
-            >
-              {table.status.replace('_', ' ')}
-              {elapsedMin > 0 && ` · ${elapsedMin}m ago`}
+            <p style={{ fontFamily: sans, fontSize: 12, color: 'var(--ink4)' }}>
+              {table.status.replace(/_/g, ' ')}
+              {elapsedMin > 0 && ` · ${elapsedMin}m`}
               {table.covers ? ` · ${table.covers} guests` : ''}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: 18,
-              color: 'var(--ink4)',
-              lineHeight: 1,
-              padding: '0 2px',
-            }}
-          >
-            ×
-          </button>
+          <button onClick={onClose} style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            fontSize: 20, color: 'var(--ink4)', lineHeight: 1, padding: 4,
+          }}>×</button>
         </div>
 
-        <div
-          style={{
-            borderTop: '1px solid var(--border)',
-            marginBottom: 14,
-          }}
-        />
-
-        {/* Order loading */}
-        {order === undefined && (
-          <p
-            style={{
-              fontFamily: "'Geist', sans-serif",
-              fontSize: 13,
-              color: 'var(--ink4)',
-              textAlign: 'center',
-              padding: '16px 0',
-            }}
-          >
-            Loading order…
-          </p>
-        )}
-
-        {/* No active order */}
-        {order === null && (
-          <p
-            style={{
-              fontFamily: "'Geist', sans-serif",
-              fontSize: 13,
-              color: 'var(--ink4)',
-              textAlign: 'center',
-              padding: '16px 0',
-            }}
-          >
-            No active order for this table.
-          </p>
-        )}
-
-        {/* Order summary */}
-        {order != null && (
-          <>
-            <p
-              style={{
-                fontFamily: "'Geist Mono', monospace",
-                fontSize: 11,
-                color: 'var(--ink4)',
-                marginBottom: 10,
-                textTransform: 'uppercase',
-                letterSpacing: '.06em',
-              }}
-            >
-              Order #{String(order.order_number ?? 0).padStart(2, '0')}
+        {/* ── Success state ── */}
+        {done && (
+          <div style={{ padding: '32px 20px', textAlign: 'center' }}>
+            <p style={{ fontSize: 40, marginBottom: 12 }}>✅</p>
+            <p style={{ fontFamily: serif, fontStyle: 'italic', fontSize: 20, color: 'var(--ink)', marginBottom: 6 }}>
+              Payment Collected!
             </p>
-
-            {/* Items */}
-            <div
-              style={{
-                maxHeight: 160,
-                overflowY: 'auto',
-                marginBottom: 12,
-              }}
-            >
-              {order.items.map((item) => (
-                <div
-                  key={item.id}
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '4px 0',
-                  }}
-                >
-                  <span
-                    style={{
-                      fontFamily: "'Geist', sans-serif",
-                      fontSize: 12,
-                      color: 'var(--ink)',
-                      flex: 1,
-                      opacity: item.is_cancelled ? 0.4 : 1,
-                      textDecoration: item.is_cancelled ? 'line-through' : 'none',
-                    }}
-                  >
-                    {item.quantity}× {item.item_name}
-                  </span>
-                  <span
-                    style={{
-                      fontFamily: "'Geist Mono', monospace",
-                      fontSize: 12,
-                      color: 'var(--ink3)',
-                      flexShrink: 0,
-                    }}
-                  >
-                    {formatINR(item.total_price)}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div
-              style={{
-                borderTop: '1px solid var(--border)',
-                padding: '8px 0',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  marginBottom: 2,
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: "'Geist', sans-serif",
-                    fontSize: 12,
-                    color: 'var(--ink4)',
-                  }}
-                >
-                  Subtotal
-                </span>
-                <span
-                  style={{
-                    fontFamily: "'Geist Mono', monospace",
-                    fontSize: 12,
-                    color: 'var(--ink4)',
-                  }}
-                >
-                  {formatINR(order.subtotal)}
-                </span>
-              </div>
-              {(order.cgst_amount > 0 || order.sgst_amount > 0) && (
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    marginBottom: 2,
-                  }}
-                >
-                  <span
-                    style={{
-                      fontFamily: "'Geist', sans-serif",
-                      fontSize: 12,
-                      color: 'var(--ink4)',
-                    }}
-                  >
-                    GST
-                  </span>
-                  <span
-                    style={{
-                      fontFamily: "'Geist Mono', monospace",
-                      fontSize: 12,
-                      color: 'var(--ink4)',
-                    }}
-                  >
-                    {formatINR(order.cgst_amount + order.sgst_amount)}
-                  </span>
-                </div>
-              )}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  marginTop: 6,
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: "'Geist', sans-serif",
-                    fontWeight: 600,
-                    fontSize: 13,
-                    color: 'var(--ink)',
-                  }}
-                >
-                  Total
-                </span>
-                <span
-                  style={{
-                    fontFamily: "'Geist Mono', monospace",
-                    fontWeight: 700,
-                    fontSize: 14,
-                    color: 'var(--ink)',
-                  }}
-                >
-                  {formatINR(order.total_amount)}
-                </span>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Payment method selector (bill requested) */}
-        {isBillRequested && order != null && (
-          <div style={{ marginBottom: 12 }}>
-            <p
-              style={{
-                fontFamily: "'Geist', sans-serif",
-                fontSize: 11,
-                color: 'var(--ink4)',
-                marginBottom: 6,
-                textTransform: 'uppercase',
-                letterSpacing: '.06em',
-              }}
-            >
-              Payment method
+            <p style={{ fontFamily: mono, fontSize: 22, fontWeight: 700, color: 'var(--ink)', marginBottom: 4 }}>
+              {formatINR(done.totalAmount)}
             </p>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {PAYMENT_METHODS.map(({ value, label }) => (
-                <button
-                  key={value}
-                  onClick={() => setPaymentMethod(value)}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: 100,
-                    fontSize: 11,
-                    fontFamily: "'Geist', sans-serif",
-                    cursor: 'pointer',
-                    background:
-                      paymentMethod === value
-                        ? 'var(--ink)'
-                        : 'transparent',
-                    color:
-                      paymentMethod === value ? '#fff' : 'var(--ink3)',
-                    border:
-                      paymentMethod === value
-                        ? '1px solid var(--ink)'
-                        : '1px solid var(--border)',
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <p style={{ fontFamily: sans, fontSize: 12, color: 'var(--ink4)', marginBottom: 24 }}>
+              {done.orderCount} order{done.orderCount !== 1 ? 's' : ''} billed · via {
+                PAYMENT_METHODS.find(m => m.value === paymentMethod)?.label ?? paymentMethod
+              }
+            </p>
+            <button
+              onClick={onClose}
+              style={{
+                fontFamily: sans, padding: '10px 28px', borderRadius: 8,
+                background: 'var(--ink)', color: '#fff', border: 'none',
+                fontSize: 14, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              Done
+            </button>
           </div>
         )}
 
-        {/* Actions */}
-        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-          {isOccupied && order != null && !billId && (
-            <button
-              onClick={handleGenerateBill}
-              disabled={loading}
-              style={{
-                flex: 1,
-                padding: '8px 12px',
-                background: 'var(--ink)',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 8,
-                fontFamily: "'Geist', sans-serif",
-                fontWeight: 500,
-                fontSize: 13,
-                cursor: loading ? 'not-allowed' : 'pointer',
-                opacity: loading ? 0.6 : 1,
-              }}
-            >
-              {loading ? 'Generating…' : 'Generate bill'}
-            </button>
-          )}
+        {/* ── Loading ── */}
+        {!done && orders === undefined && (
+          <div style={{ padding: '32px 20px', textAlign: 'center' }}>
+            <p style={{ fontFamily: sans, fontSize: 13, color: 'var(--ink4)' }}>Loading orders…</p>
+          </div>
+        )}
 
-          {isBillRequested && order != null && (
-            <button
-              onClick={handleMarkPaid}
-              disabled={loading}
-              style={{
-                flex: 1,
-                padding: '8px 12px',
-                background: 'var(--green)',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 8,
-                fontFamily: "'Geist', sans-serif",
-                fontWeight: 500,
-                fontSize: 13,
-                cursor: loading ? 'not-allowed' : 'pointer',
-                opacity: loading ? 0.6 : 1,
-              }}
-            >
-              {loading ? 'Processing…' : 'Mark as paid'}
-            </button>
-          )}
-        </div>
+        {/* ── No orders ── */}
+        {!done && orders === null && (
+          <div style={{ padding: '32px 20px', textAlign: 'center' }}>
+            <p style={{ fontFamily: sans, fontSize: 13, color: 'var(--ink4)' }}>No active orders at this table.</p>
+          </div>
+        )}
+
+        {/* ── Orders view ── */}
+        {!done && orders && orders.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 480, overflowY: 'auto' }}>
+
+            {/* In-progress orders notice */}
+            {inProgressOrders.length > 0 && (
+              <div style={{
+                margin: '12px 18px 0',
+                background: '#FFFBEB', border: '1px solid #FDE68A',
+                borderRadius: 8, padding: '8px 12px',
+              }}>
+                <p style={{ fontFamily: sans, fontSize: 12, color: '#92400E' }}>
+                  ⏳ {inProgressOrders.length} order{inProgressOrders.length !== 1 ? 's' : ''} still in progress
+                  ({inProgressOrders.map(o => o.status).join(', ')})
+                </p>
+              </div>
+            )}
+
+            {/* Each served order */}
+            {servedOrders.map((order, idx) => (
+              <div key={order.id} style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ fontFamily: mono, fontSize: 12, fontWeight: 700, color: 'var(--ink)' }}>
+                    #{String(order.order_number ?? (idx + 1)).padStart(2, '0')}
+                  </span>
+                  <span style={{
+                    fontFamily: sans, fontSize: 11, padding: '2px 8px', borderRadius: 100,
+                    background: '#F0FDF4', color: '#15803D', fontWeight: 500,
+                  }}>
+                    SERVED
+                  </span>
+                </div>
+
+                {/* Items */}
+                <div style={{ marginBottom: 8 }}>
+                  {order.items.filter(i => !i.is_cancelled).map(item => (
+                    <div key={item.id} style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '3px 0',
+                    }}>
+                      <span style={{ fontFamily: sans, fontSize: 12, color: 'var(--ink3)' }}>
+                        {item.quantity}× {item.item_name}
+                      </span>
+                      <span style={{ fontFamily: mono, fontSize: 12, color: 'var(--ink4)' }}>
+                        {formatINR(Number(item.total_price))}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Order subtotal */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 6, borderTop: '1px dashed var(--border)' }}>
+                  <span style={{ fontFamily: sans, fontSize: 12, color: 'var(--ink4)' }}>
+                    Subtotal {Number(order.cgst_amount) > 0 && `+ GST`}
+                  </span>
+                  <span style={{ fontFamily: mono, fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>
+                    {formatINR(Number(order.total_amount))}
+                  </span>
+                </div>
+              </div>
+            ))}
+
+            {/* Combined bill summary */}
+            {servedOrders.length > 0 && (
+              <div style={{ padding: '14px 18px', background: 'var(--paper2)', borderBottom: '1px solid var(--border)' }}>
+                <p style={{ fontFamily: sans, fontSize: 11, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 10 }}>
+                  Bill Summary · {totalItems} item{totalItems !== 1 ? 's' : ''}
+                </p>
+                {[
+                  { label: 'Subtotal',       value: combinedSubtotal,  show: true },
+                  { label: 'GST',            value: combinedGST,       show: combinedGST > 0 },
+                  { label: 'Service charge', value: combinedService,   show: combinedService > 0 },
+                ].filter(r => r.show).map(row => (
+                  <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontFamily: sans, fontSize: 12, color: 'var(--ink4)' }}>{row.label}</span>
+                    <span style={{ fontFamily: mono, fontSize: 12, color: 'var(--ink4)' }}>{formatINR(row.value)}</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 4 }}>
+                  <span style={{ fontFamily: sans, fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>Total</span>
+                  <span style={{ fontFamily: mono, fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>
+                    {formatINR(combinedTotal)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Payment method + Checkout */}
+            {canBill && (
+              <div style={{ padding: '14px 18px' }}>
+                <p style={{ fontFamily: sans, fontSize: 11, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+                  Payment method
+                </p>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+                  {PAYMENT_METHODS.map(({ value, label }) => (
+                    <button
+                      key={value}
+                      onClick={() => setPaymentMethod(value)}
+                      style={{
+                        padding: '6px 12px', borderRadius: 8, fontSize: 12,
+                        fontFamily: sans, cursor: 'pointer',
+                        background: paymentMethod === value ? 'var(--ink)' : 'transparent',
+                        color: paymentMethod === value ? '#fff' : 'var(--ink3)',
+                        border: paymentMethod === value ? '1.5px solid var(--ink)' : '1.5px solid var(--border)',
+                        fontWeight: paymentMethod === value ? 600 : 400,
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={handleCheckout}
+                  disabled={loading}
+                  style={{
+                    width: '100%', padding: '11px', borderRadius: 10,
+                    background: loading ? 'var(--ink3)' : 'var(--ink)',
+                    color: '#fff', border: 'none',
+                    fontFamily: sans, fontWeight: 700, fontSize: 14,
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    transition: 'background 0.15s',
+                  }}
+                >
+                  {loading
+                    ? 'Processing…'
+                    : `🧾 Generate Bill & Collect ${formatINR(combinedTotal)}`
+                  }
+                </button>
+
+                {servedOrders.length > 1 && (
+                  <p style={{ fontFamily: sans, fontSize: 11, color: 'var(--ink4)', textAlign: 'center', marginTop: 6 }}>
+                    Covers {servedOrders.length} orders in one invoice
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* No served orders — all still in progress */}
+            {servedOrders.length === 0 && inProgressOrders.length > 0 && (
+              <div style={{ padding: '20px 18px', textAlign: 'center' }}>
+                <p style={{ fontFamily: sans, fontSize: 13, color: 'var(--ink4)' }}>
+                  Orders are still being prepared — bill can be generated once they are served.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </>
   );
