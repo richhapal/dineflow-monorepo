@@ -201,6 +201,16 @@ export class TablesService {
     return tables.map(t => t.section).filter(Boolean);
   }
 
+  async renameSection(restaurantId: string, oldName: string, newName: string) {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return { updated: 0 };
+    const result = await this.prisma.restaurantTable.updateMany({
+      where: { restaurant_id: restaurantId, section: oldName, is_active: true },
+      data: { section: trimmed },
+    });
+    return { updated: result.count, old_name: oldName, new_name: trimmed };
+  }
+
   // ── HELPER ────────────────────────────────────────────────────────────────
 
   private async assertOwnership(id: string, restaurantId: string) {

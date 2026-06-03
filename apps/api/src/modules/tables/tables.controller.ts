@@ -28,6 +28,15 @@ export class TablesController {
     return this.tablesService.getSections(user.restaurant_id);
   }
 
+  // ⚠ Static PATCH must come before :id to avoid NestJS matching it as a param
+  @Patch('rename-section')
+  renameSection(
+    @CurrentUser() user: any,
+    @Body() body: { old_name: string; new_name: string },
+  ) {
+    return this.tablesService.renameSection(user.restaurant_id, body.old_name, body.new_name);
+  }
+
   @Get(':id')
   getOne(@CurrentUser() user: any, @Param('id') id: string) {
     return this.tablesService.getTable(id, user.restaurant_id);

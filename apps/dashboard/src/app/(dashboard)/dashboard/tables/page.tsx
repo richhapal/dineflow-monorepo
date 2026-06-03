@@ -84,6 +84,29 @@ export default function TablesPage() {
     });
   }
 
+  async function handleRenameSection(oldName: string, newName: string) {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return;
+    try {
+      // Bulk-rename all tables in DB with one PATCH
+      await (await import('@/lib/api')).api.patch('/tables/rename-section', {
+        old_name: oldName,
+        new_name: trimmed,
+      });
+      // Update custom sections list in localStorage
+      setCustomSections((prev) => {
+        const next = prev.map((s) => (s === oldName ? trimmed : s));
+        localStorage.setItem(LS_CUSTOM_SECTIONS, JSON.stringify(next));
+        return next;
+      });
+      // Refresh table list so section names are up-to-date everywhere
+      qc.invalidateQueries({ queryKey: tableKeys.all });
+      showToast({ type: 'success', title: `Section renamed: "${oldName}" → "${trimmed}"` });
+    } catch {
+      showToast({ type: 'error', title: 'Failed to rename section' });
+    }
+  }
+
   // Merge custom + DB-derived sections
   const dbSections = useMemo(
     () => Array.from(new Set(tables.map((t) => t.section ?? '').filter(Boolean))),
@@ -467,6 +490,7 @@ export default function TablesPage() {
               managedSections={managedSections}
               onCreateSection={handleCreateSection}
               onDeleteSection={handleDeleteSection}
+              onRenameSection={handleRenameSection}
             />
           </div>
 

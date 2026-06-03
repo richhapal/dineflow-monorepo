@@ -20,6 +20,7 @@ interface FloorPlanProps {
   managedSections: string[];
   onCreateSection: (name: string) => void;
   onDeleteSection: (name: string) => void;
+  onRenameSection: (oldName: string, newName: string) => void;
 }
 
 const ALL_SECTION = '__ALL__';
@@ -95,6 +96,7 @@ export default function FloorPlan({
   managedSections,
   onCreateSection,
   onDeleteSection,
+  onRenameSection,
 }: FloorPlanProps) {
   // ── Grid settings (persisted) ────────────────────────────────────────────────
   const [gridCols, setGridCols] = useState<GridCols>(() => {
@@ -195,6 +197,10 @@ export default function FloorPlan({
               onDelete={() => {
                 onDeleteSection(s);
                 if (selectedSection === s) onSectionChange(ALL_SECTION);
+              }}
+              onRename={(newName) => {
+                onRenameSection(s, newName);
+                if (selectedSection === s) onSectionChange(newName);
               }}
             />
           ))}
@@ -346,7 +352,7 @@ export default function FloorPlan({
           gap: 6,
         }}>
           <span>✏</span>
-          <span>Sections with no tables can be removed. Click <strong>✕</strong> on a section pill to delete it.</span>
+          <span>Click <strong>✏</strong> to rename a section (updates all tables). Click <strong>✕</strong> to delete an empty section.</span>
         </div>
       )}
 
@@ -420,6 +426,7 @@ function SectionPill({
   canDelete,
   onClick,
   onDelete,
+  onRename,
 }: {
   label: string;
   active: boolean;
@@ -428,7 +435,75 @@ function SectionPill({
   canDelete: boolean;
   onClick: () => void;
   onDelete: () => void;
+  onRename?: (newName: string) => void;
 }) {
+  const [renaming, setRenaming] = useState(false);
+  const [renameVal, setRenameVal] = useState(label);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Sync label into renameVal if label changes externally
+  useEffect(() => { setRenameVal(label); }, [label]);
+
+  useEffect(() => {
+    if (renaming) setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 30);
+  }, [renaming]);
+
+  function commitRename() {
+    const trimmed = renameVal.trim();
+    if (trimmed && trimmed !== label) onRename?.(trimmed);
+    setRenaming(false);
+  }
+
+  function cancelRename() {
+    setRenameVal(label);
+    setRenaming(false);
+  }
+
+  // In rename mode — show inline input
+  if (renaming) {
+    return (
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <input
+          ref={inputRef}
+          value={renameVal}
+          onChange={(e) => setRenameVal(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitRename();
+            if (e.key === 'Escape') cancelRename();
+          }}
+          onBlur={commitRename}
+          style={{
+            padding: '3px 10px',
+            borderRadius: 100,
+            border: '1.5px solid var(--accent)',
+            fontFamily: "'Geist', sans-serif",
+            fontSize: 12,
+            color: 'var(--ink)',
+            background: 'var(--accent-bg)',
+            outline: 'none',
+            width: Math.max(100, label.length * 9),
+          }}
+        />
+        <button
+          onMouseDown={(e) => { e.preventDefault(); commitRename(); }}
+          style={{
+            padding: '3px 8px', borderRadius: 100, background: 'var(--accent)',
+            color: '#fff', border: 'none', fontFamily: "'Geist', sans-serif",
+            fontSize: 11, cursor: 'pointer', fontWeight: 600,
+          }}
+        >✓</button>
+        <button
+          onMouseDown={(e) => { e.preventDefault(); cancelRename(); }}
+          style={{
+            padding: '3px 8px', borderRadius: 100, background: 'transparent',
+            color: 'var(--ink4)', border: '1px solid var(--border)',
+            fontFamily: "'Geist', sans-serif", fontSize: 11, cursor: 'pointer',
+          }}
+        >✕</button>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -474,25 +549,45 @@ function SectionPill({
         )}
       </button>
 
-      {/* Delete button — only visible in edit mode */}
+      {/* Edit mode actions: rename + delete */}
       {editMode && (
-        <button
-          onClick={(e) => { e.stopPropagation(); if (canDelete) onDelete(); }}
-          title={canDelete ? `Remove "${label}"` : `Move all tables out of "${label}" first`}
-          style={{
-            padding: '4px 8px 4px 2px',
-            background: 'transparent',
-            border: 'none',
-            cursor: canDelete ? 'pointer' : 'not-allowed',
-            color: canDelete ? 'var(--red, #dc2626)' : 'var(--ink4)',
-            fontSize: 11,
-            lineHeight: 1,
-            opacity: canDelete ? 1 : 0.35,
-            fontWeight: 700,
-          }}
-        >
-          ✕
-        </button>
+        <>
+          {/* Rename (pencil) */}
+          <button
+            onClick={(e) => { e.stopPropagation(); setRenaming(true); }}
+            title={`Rename "${label}"`}
+            style={{
+              padding: '4px 5px',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              color: 'var(--ink4)',
+              fontSize: 11,
+              lineHeight: 1,
+            }}
+          >
+            ✏
+          </button>
+
+          {/* Delete */}
+          <button
+            onClick={(e) => { e.stopPropagation(); if (canDelete) onDelete(); }}
+            title={canDelete ? `Remove "${label}"` : `Move all tables out of "${label}" first`}
+            style={{
+              padding: '4px 8px 4px 2px',
+              background: 'transparent',
+              border: 'none',
+              cursor: canDelete ? 'pointer' : 'not-allowed',
+              color: canDelete ? 'var(--red, #dc2626)' : 'var(--ink4)',
+              fontSize: 11,
+              lineHeight: 1,
+              opacity: canDelete ? 1 : 0.35,
+              fontWeight: 700,
+            }}
+          >
+            ✕
+          </button>
+        </>
       )}
     </div>
   );
