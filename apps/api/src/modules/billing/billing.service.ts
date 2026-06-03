@@ -161,13 +161,19 @@ export class BillingService {
     if (tableIds.length > 1) throw new BadRequestException('Cannot combine orders from different tables');
     const tableId: string | null = tableIds[0] ?? null;
 
-    // 4. Aggregate totals
+    // 4. Aggregate totals + combined customer label
     const subtotal      = orders.reduce((s: number, o: any) => s + Number(o.subtotal), 0);
     const cgstAmount    = orders.reduce((s: number, o: any) => s + Number(o.cgst_amount), 0);
     const sgstAmount    = orders.reduce((s: number, o: any) => s + Number(o.sgst_amount), 0);
     const serviceCharge = orders.reduce((s: number, o: any) => s + Number(o.service_charge), 0);
     const discountAmount= orders.reduce((s: number, o: any) => s + Number(o.discount_amount || 0), 0);
     const totalAmount   = orders.reduce((s: number, o: any) => s + Number(o.total_amount), 0);
+    const names = orders.map((o: any) => o.customer_name).filter(Boolean) as string[];
+    const combinedCustomerName = names.length === 0
+      ? null
+      : names.length === 1
+        ? names[0]
+        : `${names[0]} + ${names.length - 1} more`;
 
     const bill = await this.prisma.$transaction(async (tx) => {
       const restaurant = await tx.restaurant.update({
@@ -217,6 +223,7 @@ export class BillingService {
           restaurant_id: restaurantId,
           invoice_number: invoiceNumber,
           financial_year: financialYear,
+          customer_name: combinedCustomerName,
           subtotal,
           cgst_rate: halfRate,
           cgst_amount: cgstAmount,
@@ -281,13 +288,19 @@ export class BillingService {
       throw new BadRequestException('No served orders at this table');
     }
 
-    // Build consolidated totals across all served orders
+    // Build consolidated totals + combined customer label
     const subtotal       = orders.reduce((s: number, o: any) => s + Number(o.subtotal), 0);
     const cgstAmount     = orders.reduce((s: number, o: any) => s + Number(o.cgst_amount), 0);
     const sgstAmount     = orders.reduce((s: number, o: any) => s + Number(o.sgst_amount), 0);
     const serviceCharge  = orders.reduce((s: number, o: any) => s + Number(o.service_charge), 0);
     const discountAmount = orders.reduce((s: number, o: any) => s + Number(o.discount_amount || 0), 0);
     const totalAmount    = orders.reduce((s: number, o: any) => s + Number(o.total_amount), 0);
+    const tableNames     = orders.map((o: any) => o.customer_name).filter(Boolean) as string[];
+    const tableCustomerName = tableNames.length === 0
+      ? null
+      : tableNames.length === 1
+        ? tableNames[0]
+        : `${tableNames[0]} + ${tableNames.length - 1} more`;
 
     // Atomic: create ONE bill for the session, record payment, mark orders COMPLETED, close session
     const bill = await this.prisma.$transaction(async (tx) => {
@@ -312,6 +325,7 @@ export class BillingService {
           restaurant_id: restaurantId,
           invoice_number: invoiceNumber,
           financial_year: financialYear,
+          customer_name: tableCustomerName,
           subtotal,
           cgst_rate: halfRate,
           cgst_amount: cgstAmount,
