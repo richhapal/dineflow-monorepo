@@ -115,18 +115,23 @@ export class BillingService {
   }
 
   async getUnbilledOrders(restaurantId: string) {
+    // SERVED orders that either have no bill at all, or only a CANCELLED bill
+    // (COMPLETED = already processed by combined/checkout billing — exclude them)
     return this.prisma.order.findMany({
       where: {
         restaurant_id: restaurantId,
-        status: { in: ['SERVED', 'COMPLETED'] as any[] },
-        bill: null,
+        status: 'SERVED' as any,
         deleted_at: null,
+        OR: [
+          { bill: null } as any,
+          { bill: { is: { status: 'CANCELLED' } } } as any,
+        ],
       },
       include: {
         items: { where: { is_cancelled: false } },
         table: { select: { id: true, name: true } },
       },
-      orderBy: { completed_at: 'desc' },
+      orderBy: { created_at: 'desc' },
       take: 50,
     });
   }
@@ -375,10 +380,34 @@ export class BillingService {
   }
 
   async cancelBill(billId: string, restaurantId: string) {
-    const bill = await this.prisma.bill.findFirst({ where: { id: billId, restaurant_id: restaurantId } });
+    const bill = await this.prisma.bill.findFirst({ where: { id: billId, restaurant_id: restaurantId } }) as any;
     if (!bill) throw new NotFoundException('Bill not found');
     if (bill.status === 'PAID') throw new BadRequestException('Cannot cancel a PAID bill');
-    return this.prisma.bill.update({ where: { id: billId }, data: { status: 'CANCELLED' } });
+
+    return this.prisma.$transaction(async (tx) => {
+      const cancelled = await tx.bill.update({ where: { id: billId }, data: { status: 'CANCELLED' } });
+
+      if (bill.order_id) {
+        // Single-order bill: put the order back to SERVED so it reappears in Unbilled
+        await tx.order.update({
+          where: { id: bill.order_id },
+          data: { status: 'SERVED' as any },
+        });
+      } else if (bill.table_session_id) {
+        // Session / combined bill: restore every order in the session to SERVED
+        await tx.order.updateMany({
+          where: { table_session_id: bill.table_session_id } as any,
+          data: { status: 'SERVED' as any },
+        });
+        // Reopen the session so future combined-bill generation works
+        await (tx as any).tableSession.update({
+          where: { id: bill.table_session_id },
+          data: { status: 'ACTIVE', closed_at: null },
+        });
+      }
+
+      return cancelled;
+    });
   }
 
   async getBill(id: string, restaurantId: string) {
