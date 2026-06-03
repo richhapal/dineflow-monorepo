@@ -103,11 +103,13 @@ export class BillingService {
               table: { select: { id: true, name: true } },
             },
           },
+          // Include session table info so the Bills list can show table badges for combined bills
+          ...({ tableSession: { select: { id: true, table: { select: { id: true, name: true } } } } } as any),
           payments: {
             select: { id: true, method: true, amount: true, status: true, paid_at: true, upi_txn_id: true, notes: true },
           },
         },
-      }),
+      } as any),
       this.prisma.bill.count({ where }),
     ]);
 

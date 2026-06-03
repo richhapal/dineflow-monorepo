@@ -72,7 +72,9 @@ interface Bill {
     table?: { id: string; name: string } | null;
     items?: BillItem[];
   } | null;
-  // Session bill (multiple orders / people)
+  // Combined / session bill (getBills includes this for table badge in list)
+  tableSession?: { id: string; table?: { id: string; name: string } | null } | null;
+  // Session bill detail (loaded individually via getBill)
   sessionData?: SessionData | null;
   payments: Payment[];
 }
@@ -1084,10 +1086,11 @@ export default function BillingPage() {
   const bills = billsRes?.bills ?? [];
   const filteredBills = bills.filter(b => {
     const q = search.toLowerCase();
+    const tableName = b.order?.table?.name ?? b.tableSession?.table?.name ?? '';
     const matchSearch = !search
       || b.invoice_number.toLowerCase().includes(q)
       || (b.customer_name ?? '').toLowerCase().includes(q)
-      || (b.order?.table?.name ?? '').toLowerCase().includes(q);
+      || tableName.toLowerCase().includes(q);
     const matchStatus = statusFilter === 'All' || b.status === statusFilter;
     return matchSearch && matchStatus;
   });
@@ -1287,15 +1290,26 @@ export default function BillingPage() {
                           </td>
                           <td style={{ padding: '11px 14px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ ...mono, fontSize: 12, color: 'var(--ink)', fontWeight: 600 }}>
-                                #{String(bill.order?.order_number ?? 0).padStart(2, '0')}
-                              </span>
-                              {bill.order?.table && (
+                              {bill.order_id === null ? (
+                                // Combined / session bill
+                                <span style={{
+                                  ...sans, fontSize: 11, background: '#EDE9FE', color: '#7C3AED',
+                                  padding: '1px 7px', borderRadius: 100, fontWeight: 600,
+                                }}>
+                                  🧾 Group
+                                </span>
+                              ) : (
+                                <span style={{ ...mono, fontSize: 12, color: 'var(--ink)', fontWeight: 600 }}>
+                                  #{String(bill.order?.order_number ?? 0).padStart(2, '0')}
+                                </span>
+                              )}
+                              {/* Table badge — works for both single-order and session bills */}
+                              {(bill.order?.table?.name ?? bill.tableSession?.table?.name) && (
                                 <span style={{
                                   ...sans, fontSize: 11, background: 'var(--amber-bg)', color: 'var(--amber)',
                                   padding: '1px 6px', borderRadius: 100, fontWeight: 500,
                                 }}>
-                                  {bill.order.table.name}
+                                  {bill.order?.table?.name ?? bill.tableSession?.table?.name}
                                 </span>
                               )}
                             </div>
