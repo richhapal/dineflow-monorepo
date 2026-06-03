@@ -81,6 +81,12 @@ enum BillStatus {
   CANCELLED
 }
 
+enum SessionStatus {
+  ACTIVE   // orders still being placed
+  BILLED   // bill generated, awaiting payment
+  CLOSED   // payment collected, table released
+}
+
 enum TableStatus {
   AVAILABLE
   OCCUPIED
@@ -291,6 +297,7 @@ model Restaurant {
   payments             Payment[]
   qrCodes              QRCode[]
   customerSessions     CustomerSession[]
+  tableSessions        TableSession[]
   subscriptionEvents   SubscriptionEvent[]
   foreignLanguages     RestaurantLanguage[]
   payrollPeriods       PayrollPeriod[]
@@ -454,6 +461,7 @@ model RestaurantTable {
   restaurant    Restaurant  @relation(fields: [restaurant_id], references: [id])
   qrCodes       QRCode[]
   orders        Order[]
+  tableSessions TableSession[]
 
   @@unique([restaurant_id, name])
   @@index([restaurant_id])
@@ -512,6 +520,31 @@ model QRScanLog {
   @@index([qr_code_id])
   @@index([scanned_at])
   @@map("qr_scan_logs")
+}
+
+// =============================================================================
+// TABLE SESSIONS (group ordering — one bill per table visit)
+// =============================================================================
+
+model TableSession {
+  id               String          @id @default(cuid())
+  restaurant_id    String
+  table_id         String
+  session_qr_slug  String          @unique
+  // Customers scan /m/session/[session_qr_slug] to join the group order
+  status           SessionStatus   @default(ACTIVE)
+  started_at       DateTime        @default(now())
+  closed_at        DateTime?
+  created_at       DateTime        @default(now())
+
+  restaurant       Restaurant      @relation(fields: [restaurant_id], references: [id])
+  table            RestaurantTable @relation(fields: [table_id], references: [id])
+  orders           Order[]
+  bill             Bill?
+
+  @@index([restaurant_id])
+  @@index([table_id, status])
+  @@map("table_sessions")
 }
 
 // =============================================================================
@@ -847,7 +880,8 @@ model Order {
   waiter_note     String?              // message waiter sends to customer when modifying
 
   // ── Session link ─────────────────────────────────────────────
-  session_id      String?
+  session_id        String?           // CustomerSession (anonymous QR scan)
+  table_session_id  String?           // TableSession (group ordering at a table)
 
   // ── Idempotency ───────────────────────────────────────────────
   idempotency_key String      @unique
@@ -879,6 +913,7 @@ model Order {
   room            Room?            @relation(fields: [room_id], references: [id])
   waiter          Staff?           @relation("WaiterOrders", fields: [waiter_id], references: [id])
   session         CustomerSession? @relation(fields: [session_id], references: [id])
+  tableSession    TableSession?    @relation(fields: [table_session_id], references: [id])
   items           OrderItem[]
   statusHistory   OrderStatusHistory[]
   appliedDiscounts AppliedDiscount[]
@@ -948,7 +983,8 @@ model OrderStatusHistory {
 
 model Bill {
   id                  String     @id @default(cuid())
-  order_id            String     @unique
+  order_id            String?    @unique   // null for consolidated session bills
+  table_session_id    String?    @unique   // set for group-order consolidated bills
   restaurant_id       String
   invoice_number      String     @unique
   // Format: DF-2025-R{restaurant_short_id}-{6-digit-seq}
@@ -990,8 +1026,9 @@ model Bill {
   cancelled_at        DateTime?
   cancellation_reason String?
 
-  order               Order      @relation(fields: [order_id], references: [id])
-  restaurant          Restaurant @relation(fields: [restaurant_id], references: [id])
+  order               Order?         @relation(fields: [order_id], references: [id])
+  tableSession        TableSession?  @relation(fields: [table_session_id], references: [id])
+  restaurant          Restaurant     @relation(fields: [restaurant_id], references: [id])
   payments            Payment[]
 
   @@index([restaurant_id, invoice_date])
@@ -1002,7 +1039,7 @@ model Bill {
 
 model Payment {
   id                 String        @id @default(cuid())
-  order_id           String
+  order_id           String?       // nullable for session-level consolidated payments
   bill_id            String?
   restaurant_id      String
   method             PaymentMethod
@@ -1019,7 +1056,7 @@ model Payment {
   refund_amount      Decimal?      @db.Decimal(10,2)
   created_at         DateTime      @default(now())
 
-  order              Order         @relation(fields: [order_id], references: [id])
+  order              Order?        @relation(fields: [order_id], references: [id])
   bill               Bill?         @relation(fields: [bill_id], references: [id])
   restaurant         Restaurant    @relation(fields: [restaurant_id], references: [id])
 

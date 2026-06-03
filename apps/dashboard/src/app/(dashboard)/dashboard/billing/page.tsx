@@ -112,6 +112,11 @@ const mono: React.CSSProperties = { fontFamily: "'Geist Mono', monospace" };
 const sans: React.CSSProperties = { fontFamily: "'Geist', sans-serif" };
 const serif: React.CSSProperties = { fontFamily: "'Instrument Serif', serif" };
 
+// Format a GST % cleanly: 2.5 → "2.5", 9.0 → "9", 2.50 → "2.5"
+function fmtPct(n: number): string {
+  return parseFloat(n.toFixed(4)).toString();
+}
+
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 
 function Skeleton({ h = 16, w = '100%' }: { h?: number; w?: string | number }) {
@@ -337,79 +342,146 @@ function InvoicePanel({
     onSuccess: () => qc.invalidateQueries({ queryKey: ['bill', billId] }),
   });
 
-  const handlePrint = () => window.print();
+  const handlePrint = useCallback(() => {
+    if (!bill) return;
+    const win = window.open('', '_blank', 'width=420,height=720');
+    if (!win) { alert('Pop-up blocked — please allow pop-ups and try again.'); return; }
+    const rName = restaurant?.name || 'Restaurant';
+    const billItems = bill.order?.items?.filter(i => !i.is_cancelled) ?? [];
+    const subtotalVal = Number(bill.subtotal);
+    const cgstPctPrint = fmtPct(subtotalVal > 0 ? (Number(bill.cgst_amount) / subtotalVal * 100) : Number(bill.cgst_rate) * 100);
+    const sgstPctPrint = fmtPct(subtotalVal > 0 ? (Number(bill.sgst_amount) / subtotalVal * 100) : Number(bill.sgst_rate) * 100);
+    const itemRows = billItems.map(item =>
+      `<tr>
+        <td style="padding:2px 0;word-break:break-word">${item.item_name}</td>
+        <td style="padding:2px 0;text-align:right;white-space:nowrap;color:#666">${item.quantity}×₹${Number(item.unit_price).toFixed(0)}</td>
+        <td style="padding:2px 0;text-align:right;white-space:nowrap;font-weight:600">₹${Number(item.total_price).toFixed(2)}</td>
+      </tr>
+      ${(item.addons ?? []).map(a => `<tr><td colspan="3" style="padding:0 0 0 12px;font-size:11px;color:#888">+ ${a.addon_name} ₹${Number(a.price).toFixed(2)}</td></tr>`).join('')}`
+    ).join('');
+    const paidRows = bill.payments.map(p =>
+      `<tr><td colspan="2" style="color:#555">${p.method}</td><td style="text-align:right;color:#15803d">✓ ₹${Number(p.amount).toFixed(2)}</td></tr>`
+    ).join('');
+    const tableName = bill.order?.table?.name;
+    win.document.write(`<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>Invoice ${bill.invoice_number}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:monospace;font-size:13px;line-height:1.8;background:#f5f5f5;display:flex;flex-direction:column;align-items:center;padding:0}
+  #toolbar{background:#fff;border-bottom:1px solid #ddd;padding:10px 16px;display:flex;gap:8px;justify-content:center;width:100%;position:sticky;top:0;z-index:10}
+  #toolbar button{padding:8px 20px;border-radius:6px;border:none;font-family:monospace;font-size:13px;font-weight:600;cursor:pointer}
+  #print-btn{background:#111;color:#fff}
+  #close-btn{background:#f0f0f0;color:#333}
+  #receipt{background:#fff;width:340px;padding:24px;margin:20px 0 40px}
+  table{width:100%;border-collapse:collapse}
+  .c{text-align:center} .r{text-align:right} .b{font-weight:700}
+  .div{border-top:1px dashed #bbb;margin:8px 0}
+  .sm{font-size:11px;color:#666}
+  @media print{
+    #toolbar{display:none}
+    body{background:#fff;padding:0}
+    #receipt{margin:0;padding:12px;width:100%}
+    @page{margin:8mm;size:80mm auto}
+  }
+</style>
+</head><body>
+<div id="toolbar">
+  <button id="print-btn" onclick="window.print()">🖨 Print Bill</button>
+  <button id="close-btn" onclick="window.close()">✕ Close</button>
+</div>
+<div id="receipt">
+<p class="c b" style="font-size:16px">${rName}</p>
+${restaurant?.address ? `<p class="c sm" style="margin-top:2px">${restaurant.address}</p>` : ''}
+${restaurant?.gstin ? `<p class="c sm">GSTIN: ${restaurant.gstin}</p>` : ''}
+<div class="div"></div>
+<p>Invoice: <b>${bill.invoice_number}</b></p>
+<p>Date: ${new Date(bill.invoice_date).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })}</p>
+${tableName ? `<p>Table: ${tableName} · Covers: ${bill.order?.covers ?? ''}</p>` : ''}
+${bill.customer_name ? `<p>Customer: ${bill.customer_name}</p>` : ''}
+${bill.customer_phone ? `<p>Phone: ${bill.customer_phone}</p>` : ''}
+<div class="div"></div>
+<table>
+  <thead><tr>
+    <th style="text-align:left;font-size:11px;color:#888;font-weight:600;padding-bottom:4px">ITEM</th>
+    <th style="text-align:right;font-size:11px;color:#888;font-weight:600;padding-bottom:4px">QTY×PRICE</th>
+    <th style="text-align:right;font-size:11px;color:#888;font-weight:600;padding-bottom:4px">AMT</th>
+  </tr></thead>
+  <tbody>${itemRows}</tbody>
+</table>
+<div class="div"></div>
+<table>
+  <tr><td>Subtotal</td><td></td><td class="r">₹${subtotalVal.toFixed(2)}</td></tr>
+  ${Number(bill.cgst_amount) > 0 ? `
+  <tr><td>CGST @${cgstPctPrint}%</td><td></td><td class="r">₹${Number(bill.cgst_amount).toFixed(2)}</td></tr>
+  <tr><td>SGST @${sgstPctPrint}%</td><td></td><td class="r">₹${Number(bill.sgst_amount).toFixed(2)}</td></tr>` : ''}
+  ${Number(bill.service_charge) > 0 ? `<tr><td>Service charge</td><td></td><td class="r">₹${Number(bill.service_charge).toFixed(2)}</td></tr>` : ''}
+  ${Number(bill.discount_amount) > 0 ? `<tr><td>Discount</td><td></td><td class="r">-₹${Number(bill.discount_amount).toFixed(2)}</td></tr>` : ''}
+  ${Number(bill.round_off) !== 0 ? `<tr><td>Round off</td><td></td><td class="r">₹${Number(bill.round_off).toFixed(2)}</td></tr>` : ''}
+</table>
+<div class="div"></div>
+<table><tr><td class="b" style="font-size:15px">TOTAL</td><td></td><td class="r b" style="font-size:15px">₹${Number(bill.total_amount).toFixed(2)}</td></tr></table>
+${bill.payments.length > 0 ? `<div class="div"></div><table>${paidRows}</table>` : ''}
+<div class="div"></div>
+${restaurant?.upi_id ? `<p>UPI: ${restaurant.upi_id}</p>` : ''}
+<p>HSN/SAC: ${bill.hsn_code}</p>
+<p class="c sm" style="margin-top:10px">Thank you for dining with us!</p>
+</div>
+<script>
+  window.addEventListener('afterprint', function() { window.close(); });
+<\/script>
+</body></html>`);
+    win.document.close();
+  }, [bill, restaurant]);
 
   if (isLoading || !bill) {
     return (
-      <div style={{
-        background: '#fff', borderLeft: '1px solid var(--border)',
-        padding: 24, height: 'calc(100vh - 56px)', position: 'sticky', top: 56,
-        display: 'flex', flexDirection: 'column', gap: 12,
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <Skeleton h={20} w={120} />
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--ink4)' }}>×</button>
+      <>
+        <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 49, background: 'rgba(0,0,0,0.18)' }} />
+        <div style={{
+          position: 'fixed', top: 56, right: 0, bottom: 0, width: 420, zIndex: 50,
+          background: '#fff', borderLeft: '1px solid var(--border)',
+          padding: 24, display: 'flex', flexDirection: 'column', gap: 12,
+          boxShadow: '-8px 0 32px rgba(0,0,0,0.08)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <Skeleton h={20} w={120} />
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--ink4)' }}>×</button>
+          </div>
+          {[1,2,3,4,5].map(i => <Skeleton key={i} h={14} w={i === 3 ? '70%' : '100%'} />)}
         </div>
-        {[1,2,3,4,5].map(i => <Skeleton key={i} h={14} w={i === 3 ? '70%' : '100%'} />)}
-      </div>
+      </>
     );
   }
 
   const items = bill.order?.items?.filter(i => !i.is_cancelled) ?? [];
   const amountPaid = bill.payments.filter(p => p.status === 'PAID').reduce((s, p) => s + Number(p.amount), 0);
   const remaining = Math.max(0, Number(bill.total_amount) - amountPaid);
-  const cgstPct = (Number(bill.cgst_rate) * 100).toFixed(1);
-  const sgstPct = (Number(bill.sgst_rate) * 100).toFixed(1);
+  const subtotalNum = Number(bill.subtotal);
+  // Compute GST % from actual amounts (avoids Decimal(4,2) rounding 2.5% → 3% in DB)
+  const cgstPct = fmtPct(subtotalNum > 0 ? (Number(bill.cgst_amount) / subtotalNum * 100) : Number(bill.cgst_rate) * 100);
+  const sgstPct = fmtPct(subtotalNum > 0 ? (Number(bill.sgst_amount) / subtotalNum * 100) : Number(bill.sgst_rate) * 100);
   const tableName = bill.order?.table?.name;
 
   return (
     <>
-      {/* Print styles — only the invoice-print div shows when printing */}
-      <style>{`
-        @media print {
-          body > * { display: none !important; }
-          .invoice-print { display: block !important; position: fixed; top: 0; left: 0; width: 100%; }
-        }
-        .invoice-print { display: none; }
-      `}</style>
+      {/* Backdrop */}
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 49,
+          background: 'rgba(0,0,0,0.18)',
+        }}
+      />
 
-      {/* Printable invoice (hidden until print) */}
-      <div className="invoice-print" style={{ fontFamily: 'monospace', fontSize: 13, lineHeight: 1.8, padding: 24, maxWidth: 380, margin: '0 auto' }}>
-        <p style={{ textAlign: 'center', fontWeight: 700, fontSize: 16 }}>{restaurant?.name || 'Restaurant'}</p>
-        {restaurant?.address && <p style={{ textAlign: 'center', fontSize: 11 }}>{restaurant.address}</p>}
-        {restaurant?.gstin && <p style={{ textAlign: 'center', fontSize: 11 }}>GSTIN: {restaurant.gstin}</p>}
-        <p>{'━'.repeat(32)}</p>
-        <p>Invoice: {bill.invoice_number}</p>
-        <p>Date: {formatDate(bill.invoice_date)}</p>
-        {tableName && <p>Table: {tableName} · Covers: {bill.order.covers}</p>}
-        {bill.customer_name && <p>Customer: {bill.customer_name}</p>}
-        <p>{'━'.repeat(32)}</p>
-        {items.map((item, i) => (
-          <p key={i} style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span>{item.quantity}× {item.item_name}</span>
-            <span>₹{Number(item.total_price).toFixed(2)}</span>
-          </p>
-        ))}
-        <p>{'━'.repeat(32)}</p>
-        <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>Subtotal</span><span>₹{Number(bill.subtotal).toFixed(2)}</span></p>
-        {Number(bill.cgst_amount) > 0 && <>
-          <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>CGST @{cgstPct}%</span><span>₹{Number(bill.cgst_amount).toFixed(2)}</span></p>
-          <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>SGST @{sgstPct}%</span><span>₹{Number(bill.sgst_amount).toFixed(2)}</span></p>
-        </>}
-        {Number(bill.service_charge) > 0 && <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>Service charge</span><span>₹{Number(bill.service_charge).toFixed(2)}</span></p>}
-        {Number(bill.discount_amount) > 0 && <p style={{ display: 'flex', justifyContent: 'space-between' }}><span>Discount</span><span>-₹{Number(bill.discount_amount).toFixed(2)}</span></p>}
-        <p>{'━'.repeat(32)}</p>
-        <p style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}><span>TOTAL</span><span>₹{Number(bill.total_amount).toFixed(2)}</span></p>
-        {restaurant?.upi_id && <p>UPI: {restaurant.upi_id}</p>}
-        <p>HSN/SAC: {bill.hsn_code}</p>
-        <p style={{ textAlign: 'center', marginTop: 8 }}>Thank you!</p>
-      </div>
-
-      {/* On-screen panel */}
+      {/* On-screen panel — fixed right drawer */}
       <div style={{
+        position: 'fixed', top: 56, right: 0, bottom: 0,
+        width: 420, zIndex: 50,
         background: '#fff', borderLeft: '1px solid var(--border)',
-        overflowY: 'auto', height: 'calc(100vh - 56px)',
-        position: 'sticky', top: 56, display: 'flex', flexDirection: 'column',
+        display: 'flex', flexDirection: 'column',
+        boxShadow: '-8px 0 32px rgba(0,0,0,0.08)',
       }}>
         {/* Panel header */}
         <div style={{
@@ -423,8 +495,8 @@ function InvoicePanel({
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--ink4)' }}>×</button>
         </div>
 
-        {/* Thermal receipt */}
-        <div style={{ padding: '20px', flexGrow: 1 }}>
+        {/* Thermal receipt — scrollable */}
+        <div style={{ padding: '20px', flexGrow: 1, overflowY: 'auto', minHeight: 0 }}>
           <div style={{
             ...mono, fontSize: 13, lineHeight: 1.9,
             background: 'var(--paper)', borderRadius: 10, padding: 20,
@@ -457,29 +529,40 @@ function InvoicePanel({
 
             <p style={{ color: 'var(--border2)', margin: '8px 0' }}>{'━'.repeat(28)}</p>
 
-            {/* Header row */}
-            <p style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--ink4)' }}>
-              <span>ITEM</span><span>QTY × PRICE</span><span>AMT</span>
-            </p>
+            {/* Header row — CSS grid keeps columns aligned regardless of name length */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 76px 62px', fontSize: 11, color: 'var(--ink4)', gap: 4, marginBottom: 2 }}>
+              <span>ITEM</span>
+              <span style={{ textAlign: 'right' }}>QTY×PRICE</span>
+              <span style={{ textAlign: 'right' }}>AMT</span>
+            </div>
             <p style={{ color: 'var(--border2)', margin: '4px 0' }}>{'━'.repeat(28)}</p>
 
             {items.length === 0 ? (
               <p style={{ ...sans, fontSize: 12, color: 'var(--ink4)', fontStyle: 'italic' }}>No items</p>
             ) : items.map((item, i) => (
-              <div key={i}>
-                <p style={{ display: 'flex', justifyContent: 'space-between', gap: 4 }}>
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div key={i} style={{ marginBottom: 4 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 76px 62px', gap: 4, alignItems: 'start' }}>
+                  {/* Item name: wraps up to 2 lines then ellipsis */}
+                  <span style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    wordBreak: 'break-word',
+                    lineHeight: 1.4,
+                  }}>
                     {item.item_name}
                   </span>
-                  <span style={{ flexShrink: 0, color: 'var(--ink4)', fontSize: 12 }}>
+                  <span style={{ color: 'var(--ink4)', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {item.quantity}×₹{Number(item.unit_price).toFixed(0)}
                   </span>
-                  <span style={{ flexShrink: 0, fontWeight: 600 }}>
+                  <span style={{ fontWeight: 600, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     ₹{Number(item.total_price).toFixed(2)}
                   </span>
-                </p>
+                </div>
                 {item.addons?.map((a, ai) => (
-                  <p key={ai} style={{ fontSize: 11, color: 'var(--ink4)', paddingLeft: 8 }}>
+                  <p key={ai} style={{ fontSize: 11, color: 'var(--ink4)', paddingLeft: 8, margin: 0 }}>
                     + {a.addon_name} ₹{Number(a.price).toFixed(2)}
                   </p>
                 ))}
@@ -837,10 +920,6 @@ export default function BillingPage() {
     <>
       <style>{`
         @keyframes shimmer { 0%{background-position:-600px 0} 100%{background-position:600px 0} }
-        @media print {
-          body > * { display: none !important; }
-          .invoice-print { display: block !important; position: fixed; top: 0; left: 0; width: 100%; }
-        }
       `}</style>
 
       <div style={{ padding: '24px 28px', background: 'var(--paper, #fafaf9)', minHeight: 'calc(100vh - 56px)' }}>
@@ -948,11 +1027,11 @@ export default function BillingPage() {
 
         {/* ── Bills Tab ── */}
         {activeTab === 'bills' && (
-          <div style={{ display: 'grid', gridTemplateColumns: selectedBillId ? '1fr 400px' : '1fr', gap: 0, alignItems: 'start' }}>
+          <div>
             {/* Table */}
             <div style={{
               background: '#fff', border: '1px solid var(--border)',
-              borderRadius: selectedBillId ? '12px 0 0 12px' : 12, overflow: 'hidden',
+              borderRadius: 12, overflow: 'hidden',
             }}>
               {/* Toolbar */}
               <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>

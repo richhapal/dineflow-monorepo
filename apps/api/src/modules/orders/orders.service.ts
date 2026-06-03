@@ -4,6 +4,7 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
 import { CreateOrderDto, CreatePublicOrderDto } from './dto/create-order.dto';
@@ -95,8 +96,8 @@ export class OrdersService {
     const serviceCharge = Math.round(subtotal * serviceChargeRate * 100) / 100;
     const totalAmount = subtotal + cgst + sgst + serviceCharge;
 
-    // 6. Create order in transaction
-    const order = await this.prisma.$transaction(async (tx) => {
+    // 6. Create order in transaction (+ auto-create/join TableSession for dine-in tables)
+    const { order, sessionQrSlug } = await this.prisma.$transaction(async (tx) => {
       // Assign a daily sequential order number (per restaurant, resets at midnight)
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
@@ -109,12 +110,35 @@ export class OrdersService {
       });
       const orderNumber = todayCount + 1;
 
+      // Resolve or create a TableSession for dine-in table orders
+      let tableSessionId: string | undefined;
+      let sessionQrSlug: string | undefined;
+      if (dto.table_id) {
+        let session = await (tx as any).tableSession.findFirst({
+          where: { table_id: dto.table_id, restaurant_id: restaurantId, status: 'ACTIVE' },
+        });
+        if (!session) {
+          const slug = randomBytes(4).toString('hex'); // e.g. "a3f7b2c1"
+          session = await (tx as any).tableSession.create({
+            data: {
+              restaurant_id: restaurantId,
+              table_id: dto.table_id,
+              session_qr_slug: slug,
+              status: 'ACTIVE',
+            },
+          });
+        }
+        tableSessionId = session.id;
+        sessionQrSlug = session.session_qr_slug;
+      }
+
       const newOrder = await tx.order.create({
         data: {
           restaurant_id: restaurantId,
           order_number: orderNumber,
           table_id: dto.table_id,
           room_id: dto.room_id,
+          table_session_id: tableSessionId,
           order_type: dto.order_type as any,
           customer_name: dto.customer_name,
           customer_phone: dto.customer_phone,
@@ -159,11 +183,11 @@ export class OrdersService {
           statusHistory: true,
         },
       });
-      return newOrder;
+      return { order: newOrder, sessionQrSlug };
     });
 
     // 7. Emit WebSocket event
-    this.gateway.emitNewOrder(restaurantId, order);
+    this.gateway.emitNewOrder(restaurantId, { ...order, session_qr_slug: sessionQrSlug });
 
     // 8. Schedule auto-cancel timeout — fire-and-forget (never block the order response)
     if (!restaurant.auto_accept_orders) {
@@ -171,7 +195,7 @@ export class OrdersService {
       this.queueService.scheduleOrderTimeout(order.id, restaurantId, timeoutMin).catch(() => {/* non-critical */});
     }
 
-    return order;
+    return { ...order, session_qr_slug: sessionQrSlug };
   }
 
   async findAll(restaurantId: string, status?: string, from?: string, to?: string, tableId?: string) {
@@ -201,7 +225,7 @@ export class OrdersService {
         ...statusFilter,
         ...dateFilter,
       },
-      include: { items: { include: { addons: true } }, table: true, room: true },
+      include: { items: { include: { addons: true } }, table: true, room: true, tableSession: { select: { session_qr_slug: true, status: true } } },
       orderBy: { created_at: 'desc' },
     });
   }
@@ -483,6 +507,41 @@ export class OrdersService {
     });
     if (!order) throw new NotFoundException('Order not found');
     return order;
+  }
+
+  async getTableSession(sessionSlug: string) {
+    const session = await (this.prisma as any).tableSession.findUnique({
+      where: { session_qr_slug: sessionSlug },
+      include: {
+        table: { select: { id: true, name: true, capacity: true } },
+        restaurant: { select: { id: true, name: true, slug: true, logo_public_id: true } },
+        orders: {
+          where: { status: { notIn: ['CANCELLED'] }, deleted_at: null },
+          include: { items: { where: { is_cancelled: false } } },
+          orderBy: { created_at: 'asc' },
+        },
+      },
+    });
+    if (!session || session.status === 'CLOSED') throw new NotFoundException('Session not found or closed');
+    return session;
+  }
+
+  async createFromTableSession(sessionSlug: string, dto: CreateOrderDto) {
+    const session = await (this.prisma as any).tableSession.findUnique({
+      where: { session_qr_slug: sessionSlug },
+      include: { restaurant: true },
+    });
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.status !== 'ACTIVE') throw new BadRequestException('This table session is no longer active');
+
+    // Force the order to the session's table and restaurant
+    const patchedDto: CreateOrderDto = {
+      ...dto,
+      table_id: session.table_id,
+      order_type: 'DINE_IN' as any,
+    };
+
+    return this.create(patchedDto, session.restaurant_id);
   }
 
   async getBySessionToken(sessionToken: string) {

@@ -21,6 +21,17 @@ export class OrdersController {
     return this.ordersService.getBySessionToken(token);
   }
 
+  // ─── Group ordering via table session QR ────────────────────────────────
+  @Get('table-session/:slug')
+  getTableSession(@Param('slug') slug: string) {
+    return this.ordersService.getTableSession(slug);
+  }
+
+  @Post('table-session/:slug')
+  createFromTableSession(@Param('slug') slug: string, @Body() dto: CreateOrderDto) {
+    return this.ordersService.createFromTableSession(slug, dto);
+  }
+
   // ─── Single QR ordering (public, no auth) ───────────────────────────────
   @Post('single-qr')
   createFromSingleQR(@Body() dto: CreateSingleQROrderDto) {

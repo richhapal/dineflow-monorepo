@@ -21,6 +21,11 @@ interface OrderItem {
   is_cancelled: boolean;
 }
 
+interface TableSession {
+  session_qr_slug: string;
+  status: string;
+}
+
 interface TableOrder {
   id: string;
   order_number?: number | null;
@@ -34,6 +39,7 @@ interface TableOrder {
   total_amount: number;
   items: OrderItem[];
   created_at: string;
+  tableSession?: TableSession | null;
 }
 
 const PAYMENT_METHODS = [
@@ -56,6 +62,7 @@ export default function TablePopover({
   const [paymentMethod, setPaymentMethod] = useState('CASH');
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState<{ totalAmount: number; orderCount: number } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // ── Fetch all non-completed orders for this table ──────────────────────────
   const fetchOrders = useCallback(() => {
@@ -101,6 +108,10 @@ export default function TablePopover({
   const servedOrders = orders?.filter(o => ['SERVED', 'COMPLETED'].includes(o.status)) ?? [];
   const inProgressOrders = orders?.filter(o => !['SERVED', 'COMPLETED', 'CANCELLED'].includes(o.status)) ?? [];
 
+  // Group session QR — derived from first order that has a tableSession
+  const sessionSlug = orders?.find(o => o.tableSession?.session_qr_slug)?.tableSession?.session_qr_slug ?? null;
+  const sessionUrl = sessionSlug ? `http://localhost:3001/m/session/${sessionSlug}` : null;
+
   const combinedTotal    = servedOrders.reduce((s, o) => s + Number(o.total_amount), 0);
   const combinedSubtotal = servedOrders.reduce((s, o) => s + Number(o.subtotal), 0);
   const combinedGST      = servedOrders.reduce((s, o) => s + Number(o.cgst_amount) + Number(o.sgst_amount), 0);
@@ -120,7 +131,7 @@ export default function TablePopover({
       const r = await api.post(`/billing/checkout-table/${table.id}`, {
         payment_method: paymentMethod,
       });
-      setDone({ totalAmount: r.data.totalAmount, orderCount: r.data.orderCount });
+      setDone({ totalAmount: r.data.totalAmount ?? r.data.bill?.total_amount, orderCount: r.data.orderCount });
       showToast({ type: 'success', title: `Bill paid · ${formatINR(r.data.totalAmount)}` });
       onStatusChanged(); // refresh table grid
     } catch (err: any) {
@@ -163,6 +174,42 @@ export default function TablePopover({
             fontSize: 20, color: 'var(--ink4)', lineHeight: 1, padding: 4,
           }}>×</button>
         </div>
+
+        {/* ── Group QR section ── */}
+        {!done && sessionUrl && (
+          <div style={{
+            margin: '12px 18px 0',
+            background: '#F0F9FF', border: '1px solid #BAE6FD',
+            borderRadius: 10, padding: '10px 14px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+          }}>
+            <div>
+              <p style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, color: '#0369A1', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                Group Order QR
+              </p>
+              <p style={{ fontFamily: mono, fontSize: 10, color: '#0369A1', wordBreak: 'break-all' }}>
+                /m/session/{sessionSlug}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(sessionUrl).then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                });
+              }}
+              style={{
+                fontFamily: sans, fontSize: 11, fontWeight: 600, padding: '5px 10px',
+                borderRadius: 6, border: '1px solid #BAE6FD',
+                background: copied ? '#0EA5E9' : '#fff',
+                color: copied ? '#fff' : '#0369A1', cursor: 'pointer',
+                whiteSpace: 'nowrap', flexShrink: 0,
+              }}
+            >
+              {copied ? '✓ Copied' : 'Copy Link'}
+            </button>
+          </div>
+        )}
 
         {/* ── Success state ── */}
         {done && (
