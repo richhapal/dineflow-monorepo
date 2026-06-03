@@ -509,6 +509,20 @@ export class OrdersService {
     return order;
   }
 
+  /** Public: resolve a permanent table link → active session slug (if any) */
+  async getActiveSessionByTableId(tableId: string) {
+    const session = await (this.prisma as any).tableSession.findFirst({
+      where: { table_id: tableId, status: 'ACTIVE' },
+      include: { table: { select: { id: true, name: true } } },
+    });
+    return {
+      tableId,
+      tableName: session?.table?.name ?? null,
+      sessionSlug: session?.session_qr_slug ?? null,
+      hasActiveSession: !!session,
+    };
+  }
+
   async getTableSession(sessionSlug: string) {
     const session = await (this.prisma as any).tableSession.findUnique({
       where: { session_qr_slug: sessionSlug },

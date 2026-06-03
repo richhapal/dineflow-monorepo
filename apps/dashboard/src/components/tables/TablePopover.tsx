@@ -175,41 +175,55 @@ export default function TablePopover({
           }}>×</button>
         </div>
 
-        {/* ── Group QR section ── */}
-        {!done && sessionUrl && (
-          <div style={{
-            margin: '12px 18px 0',
-            background: '#F0F9FF', border: '1px solid #BAE6FD',
-            borderRadius: 10, padding: '10px 14px',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-          }}>
-            <div>
-              <p style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, color: '#0369A1', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                Group Order QR
-              </p>
-              <p style={{ fontFamily: mono, fontSize: 10, color: '#0369A1', wordBreak: 'break-all' }}>
-                /m/session/{sessionSlug}
-              </p>
+        {/* ── Permanent Table QR (always visible — print on table tent card) ── */}
+        {!done && (() => {
+          const tableUrl = `${process.env.NEXT_PUBLIC_WEB_URL || 'http://localhost:3001'}/m/table/${table.id}`;
+          const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=96x96&margin=4&data=${encodeURIComponent(tableUrl)}`;
+          return (
+            <div style={{
+              margin: '12px 18px 0',
+              background: '#F8FAFC', border: '1px solid #E2E8F0',
+              borderRadius: 10, padding: '10px 14px',
+              display: 'flex', alignItems: 'center', gap: 12,
+            }}>
+              {/* QR image */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={qrSrc} alt="Table QR" width={72} height={72} style={{ borderRadius: 6, flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                  Scan to Order
+                </p>
+                <p style={{ fontFamily: mono, fontSize: 9, color: '#9ca3af', wordBreak: 'break-all', marginBottom: 6 }}>
+                  /m/table/{table.id.slice(-8)}
+                </p>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(tableUrl).then(() => {
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      });
+                    }}
+                    style={{
+                      fontFamily: sans, fontSize: 10, fontWeight: 600, padding: '4px 8px',
+                      borderRadius: 5, border: '1px solid #E2E8F0',
+                      background: copied ? '#111' : '#fff',
+                      color: copied ? '#fff' : '#374151', cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {copied ? '✓ Copied' : 'Copy Link'}
+                  </button>
+                  {sessionUrl && (
+                    <span style={{ fontFamily: sans, fontSize: 10, color: '#22C55E', padding: '4px 0', fontWeight: 600 }}>
+                      ● Session active
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(sessionUrl).then(() => {
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                });
-              }}
-              style={{
-                fontFamily: sans, fontSize: 11, fontWeight: 600, padding: '5px 10px',
-                borderRadius: 6, border: '1px solid #BAE6FD',
-                background: copied ? '#0EA5E9' : '#fff',
-                color: copied ? '#fff' : '#0369A1', cursor: 'pointer',
-                whiteSpace: 'nowrap', flexShrink: 0,
-              }}
-            >
-              {copied ? '✓ Copied' : 'Copy Link'}
-            </button>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── Success state ── */}
         {done && (

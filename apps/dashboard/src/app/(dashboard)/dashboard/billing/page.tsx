@@ -17,9 +17,34 @@ interface Payment {
   notes?: string | null;
 }
 
+interface BillItem {
+  id: string;
+  item_name: string;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+  is_cancelled: boolean;
+  notes?: string | null;
+  addons?: Array<{ addon_name: string; price: number }>;
+}
+
+interface SessionOrder {
+  id: string;
+  customer_name?: string | null;
+  total_amount: number;
+  subtotal: number;
+  items: BillItem[];
+}
+
+interface SessionData {
+  id: string;
+  table: { id: string; name: string };
+  orders: SessionOrder[];
+}
+
 interface Bill {
   id: string;
-  order_id: string;
+  order_id: string | null;
   invoice_number: string;
   invoice_date: string;
   financial_year: string;
@@ -39,22 +64,16 @@ interface Bill {
   status: 'DRAFT' | 'GENERATED' | 'SENT' | 'PAID' | 'CANCELLED';
   whatsapp_sent: boolean;
   print_count: number;
-  order: {
+  // Single-order bill
+  order?: {
     order_number?: number | null;
     covers: number;
     order_type: string;
     table?: { id: string; name: string } | null;
-    items?: Array<{
-      id: string;
-      item_name: string;
-      quantity: number;
-      unit_price: number;
-      total_price: number;
-      is_cancelled: boolean;
-      notes?: string | null;
-      addons?: Array<{ addon_name: string; price: number }>;
-    }>;
-  };
+    items?: BillItem[];
+  } | null;
+  // Session bill (multiple orders / people)
+  sessionData?: SessionData | null;
   payments: Payment[];
 }
 
@@ -347,22 +366,47 @@ function InvoicePanel({
     const win = window.open('', '_blank', 'width=420,height=720');
     if (!win) { alert('Pop-up blocked — please allow pop-ups and try again.'); return; }
     const rName = restaurant?.name || 'Restaurant';
-    const billItems = bill.order?.items?.filter(i => !i.is_cancelled) ?? [];
     const subtotalVal = Number(bill.subtotal);
     const cgstPctPrint = fmtPct(subtotalVal > 0 ? (Number(bill.cgst_amount) / subtotalVal * 100) : Number(bill.cgst_rate) * 100);
     const sgstPctPrint = fmtPct(subtotalVal > 0 ? (Number(bill.sgst_amount) / subtotalVal * 100) : Number(bill.sgst_rate) * 100);
-    const itemRows = billItems.map(item =>
-      `<tr>
-        <td style="padding:2px 0;word-break:break-word">${item.item_name}</td>
-        <td style="padding:2px 0;text-align:right;white-space:nowrap;color:#666">${item.quantity}×₹${Number(item.unit_price).toFixed(0)}</td>
-        <td style="padding:2px 0;text-align:right;white-space:nowrap;font-weight:600">₹${Number(item.total_price).toFixed(2)}</td>
-      </tr>
-      ${(item.addons ?? []).map(a => `<tr><td colspan="3" style="padding:0 0 0 12px;font-size:11px;color:#888">+ ${a.addon_name} ₹${Number(a.price).toFixed(2)}</td></tr>`).join('')}`
-    ).join('');
     const paidRows = bill.payments.map(p =>
       `<tr><td colspan="2" style="color:#555">${p.method}</td><td style="text-align:right;color:#15803d">✓ ₹${Number(p.amount).toFixed(2)}</td></tr>`
     ).join('');
-    const tableName = bill.order?.table?.name;
+    const printTableName = bill.sessionData?.table?.name ?? bill.order?.table?.name;
+    const printCovers = bill.sessionData
+      ? `${bill.sessionData.orders.length} guest${bill.sessionData.orders.length !== 1 ? 's' : ''}`
+      : bill.order?.covers ? `Covers: ${bill.order.covers}` : '';
+
+    // Build item rows: either per-person (session) or flat (single order)
+    const itemsHtml = bill.sessionData
+      ? bill.sessionData.orders.map((person, pi) => `
+          <tr><td colspan="3" style="padding-top:${pi > 0 ? 8 : 0}px;padding-bottom:2px">
+            <span style="font-size:11px;font-weight:700;background:#f3f4f6;padding:2px 6px;border-radius:3px">
+              👤 ${person.customer_name || `Guest ${pi + 1}`}
+            </span>
+          </td></tr>
+          ${person.items.map(item =>
+            `<tr>
+              <td style="padding:2px 0;word-break:break-word">${item.item_name}</td>
+              <td style="padding:2px 0;text-align:right;white-space:nowrap;color:#666">${item.quantity}×₹${Number(item.unit_price).toFixed(0)}</td>
+              <td style="padding:2px 0;text-align:right;white-space:nowrap;font-weight:600">₹${Number(item.total_price).toFixed(2)}</td>
+            </tr>
+            ${(item.addons ?? []).map(a => `<tr><td colspan="3" style="padding:0 0 0 12px;font-size:11px;color:#888">+ ${a.addon_name} ₹${Number(a.price).toFixed(2)}</td></tr>`).join('')}`
+          ).join('')}
+          <tr style="border-top:1px dashed #ccc">
+            <td colspan="2" style="font-size:11px;color:#888;padding-top:2px">${person.customer_name || `Guest ${pi + 1}`}'s total</td>
+            <td style="text-align:right;font-size:11px;font-weight:600;padding-top:2px">₹${Number(person.total_amount).toFixed(2)}</td>
+          </tr>
+        `).join('')
+      : (bill.order?.items?.filter(i => !i.is_cancelled) ?? []).map(item =>
+          `<tr>
+            <td style="padding:2px 0;word-break:break-word">${item.item_name}</td>
+            <td style="padding:2px 0;text-align:right;white-space:nowrap;color:#666">${item.quantity}×₹${Number(item.unit_price).toFixed(0)}</td>
+            <td style="padding:2px 0;text-align:right;white-space:nowrap;font-weight:600">₹${Number(item.total_price).toFixed(2)}</td>
+          </tr>
+          ${(item.addons ?? []).map(a => `<tr><td colspan="3" style="padding:0 0 0 12px;font-size:11px;color:#888">+ ${a.addon_name} ₹${Number(a.price).toFixed(2)}</td></tr>`).join('')}`
+        ).join('');
+
     win.document.write(`<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -398,7 +442,7 @@ ${restaurant?.gstin ? `<p class="c sm">GSTIN: ${restaurant.gstin}</p>` : ''}
 <div class="div"></div>
 <p>Invoice: <b>${bill.invoice_number}</b></p>
 <p>Date: ${new Date(bill.invoice_date).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })}</p>
-${tableName ? `<p>Table: ${tableName} · Covers: ${bill.order?.covers ?? ''}</p>` : ''}
+${printTableName ? `<p>Table: ${printTableName}${printCovers ? ` · ${printCovers}` : ''}</p>` : ''}
 ${bill.customer_name ? `<p>Customer: ${bill.customer_name}</p>` : ''}
 ${bill.customer_phone ? `<p>Phone: ${bill.customer_phone}</p>` : ''}
 <div class="div"></div>
@@ -408,7 +452,7 @@ ${bill.customer_phone ? `<p>Phone: ${bill.customer_phone}</p>` : ''}
     <th style="text-align:right;font-size:11px;color:#888;font-weight:600;padding-bottom:4px">QTY×PRICE</th>
     <th style="text-align:right;font-size:11px;color:#888;font-weight:600;padding-bottom:4px">AMT</th>
   </tr></thead>
-  <tbody>${itemRows}</tbody>
+  <tbody>${itemsHtml}</tbody>
 </table>
 <div class="div"></div>
 <table>
@@ -455,14 +499,19 @@ ${restaurant?.upi_id ? `<p>UPI: ${restaurant.upi_id}</p>` : ''}
     );
   }
 
-  const items = bill.order?.items?.filter(i => !i.is_cancelled) ?? [];
+  // ─── Derived values ────────────────────────────────────────────────────────
+  const isSessionBill = !!bill.sessionData;
+  // Table name: session bills get it from sessionData, single-order bills from order.table
+  const tableName = bill.sessionData?.table?.name ?? bill.order?.table?.name;
+  // For single-order bills, use order.items. For session bills, use sessionData.orders
+  const flatItems = bill.order?.items?.filter(i => !i.is_cancelled) ?? [];
+  const sessionOrders = bill.sessionData?.orders ?? [];
   const amountPaid = bill.payments.filter(p => p.status === 'PAID').reduce((s, p) => s + Number(p.amount), 0);
   const remaining = Math.max(0, Number(bill.total_amount) - amountPaid);
   const subtotalNum = Number(bill.subtotal);
   // Compute GST % from actual amounts (avoids Decimal(4,2) rounding 2.5% → 3% in DB)
   const cgstPct = fmtPct(subtotalNum > 0 ? (Number(bill.cgst_amount) / subtotalNum * 100) : Number(bill.cgst_rate) * 100);
   const sgstPct = fmtPct(subtotalNum > 0 ? (Number(bill.sgst_amount) / subtotalNum * 100) : Number(bill.sgst_rate) * 100);
-  const tableName = bill.order?.table?.name;
 
   return (
     <>
@@ -522,52 +571,100 @@ ${restaurant?.upi_id ? `<p>UPI: ${restaurant.upi_id}</p>` : ''}
             <p>Invoice: <strong>{bill.invoice_number}</strong></p>
             <p>Date: {formatDate(bill.invoice_date)}</p>
             <p>F.Y.: {bill.financial_year}</p>
-            {tableName && <p>Table: {tableName} · Covers: {bill.order.covers}</p>}
+            {tableName && (
+              <p>Table: {tableName}{isSessionBill
+                ? ` · ${sessionOrders.length} guest${sessionOrders.length !== 1 ? 's' : ''}`
+                : bill.order?.covers ? ` · Covers: ${bill.order.covers}` : ''
+              }</p>
+            )}
             {bill.customer_name && <p>Customer: {bill.customer_name}</p>}
             {bill.customer_phone && <p>Phone: {bill.customer_phone}</p>}
             {bill.customer_gstin && <p>GSTIN: {bill.customer_gstin}</p>}
 
             <p style={{ color: 'var(--border2)', margin: '8px 0' }}>{'━'.repeat(28)}</p>
 
-            {/* Header row — CSS grid keeps columns aligned regardless of name length */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 76px 62px', fontSize: 11, color: 'var(--ink4)', gap: 4, marginBottom: 2 }}>
-              <span>ITEM</span>
-              <span style={{ textAlign: 'right' }}>QTY×PRICE</span>
-              <span style={{ textAlign: 'right' }}>AMT</span>
-            </div>
-            <p style={{ color: 'var(--border2)', margin: '4px 0' }}>{'━'.repeat(28)}</p>
-
-            {items.length === 0 ? (
-              <p style={{ ...sans, fontSize: 12, color: 'var(--ink4)', fontStyle: 'italic' }}>No items</p>
-            ) : items.map((item, i) => (
-              <div key={i} style={{ marginBottom: 4 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 76px 62px', gap: 4, alignItems: 'start' }}>
-                  {/* Item name: wraps up to 2 lines then ellipsis */}
-                  <span style={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    display: '-webkit-box',
-                    WebkitLineClamp: 2,
-                    WebkitBoxOrient: 'vertical',
-                    wordBreak: 'break-word',
-                    lineHeight: 1.4,
-                  }}>
-                    {item.item_name}
-                  </span>
-                  <span style={{ color: 'var(--ink4)', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {item.quantity}×₹{Number(item.unit_price).toFixed(0)}
-                  </span>
-                  <span style={{ fontWeight: 600, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    ₹{Number(item.total_price).toFixed(2)}
-                  </span>
+            {/* ── SESSION BILL: per-person sections ── */}
+            {isSessionBill ? (
+              sessionOrders.length === 0 ? (
+                <p style={{ ...sans, fontSize: 12, color: 'var(--ink4)', fontStyle: 'italic' }}>No items</p>
+              ) : sessionOrders.map((person, pi) => (
+                <div key={person.id}>
+                  {/* Person header */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ ...sans, fontSize: 11, fontWeight: 700, color: 'var(--ink)', background: 'var(--paper2)', padding: '2px 8px', borderRadius: 4 }}>
+                      👤 {person.customer_name || `Guest ${pi + 1}`}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--ink4)' }}>
+                      {person.items.length} item{person.items.length !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  {/* Column header once per person */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 76px 62px', fontSize: 10, color: 'var(--ink4)', gap: 4, marginBottom: 2 }}>
+                    <span>ITEM</span><span style={{ textAlign: 'right' }}>QTY×PRICE</span><span style={{ textAlign: 'right' }}>AMT</span>
+                  </div>
+                  {person.items.map((item, i) => (
+                    <div key={i} style={{ marginBottom: 3 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 76px 62px', gap: 4, alignItems: 'start' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word', lineHeight: 1.4 }}>
+                          {item.item_name}
+                        </span>
+                        <span style={{ color: 'var(--ink4)', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          {item.quantity}×₹{Number(item.unit_price).toFixed(0)}
+                        </span>
+                        <span style={{ fontWeight: 600, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          ₹{Number(item.total_price).toFixed(2)}
+                        </span>
+                      </div>
+                      {item.addons?.map((a, ai) => (
+                        <p key={ai} style={{ fontSize: 10, color: 'var(--ink4)', paddingLeft: 8, margin: 0 }}>
+                          + {a.addon_name} ₹{Number(a.price).toFixed(2)}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                  {/* Per-person subtotal */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border)', paddingTop: 4, marginTop: 4, marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, color: 'var(--ink4)' }}>{person.customer_name || `Guest ${pi + 1}`}'s subtotal</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink)' }}>₹{Number(person.total_amount).toFixed(2)}</span>
+                  </div>
+                  {pi < sessionOrders.length - 1 && (
+                    <p style={{ color: 'var(--border2)', margin: '4px 0 8px' }}>{'╌'.repeat(28)}</p>
+                  )}
                 </div>
-                {item.addons?.map((a, ai) => (
-                  <p key={ai} style={{ fontSize: 11, color: 'var(--ink4)', paddingLeft: 8, margin: 0 }}>
-                    + {a.addon_name} ₹{Number(a.price).toFixed(2)}
-                  </p>
+              ))
+            ) : (
+              /* ── SINGLE-ORDER BILL: flat item list ── */
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 76px 62px', fontSize: 11, color: 'var(--ink4)', gap: 4, marginBottom: 2 }}>
+                  <span>ITEM</span>
+                  <span style={{ textAlign: 'right' }}>QTY×PRICE</span>
+                  <span style={{ textAlign: 'right' }}>AMT</span>
+                </div>
+                <p style={{ color: 'var(--border2)', margin: '4px 0' }}>{'━'.repeat(28)}</p>
+                {flatItems.length === 0 ? (
+                  <p style={{ ...sans, fontSize: 12, color: 'var(--ink4)', fontStyle: 'italic' }}>No items</p>
+                ) : flatItems.map((item, i) => (
+                  <div key={i} style={{ marginBottom: 4 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 76px 62px', gap: 4, alignItems: 'start' }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word', lineHeight: 1.4 }}>
+                        {item.item_name}
+                      </span>
+                      <span style={{ color: 'var(--ink4)', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        {item.quantity}×₹{Number(item.unit_price).toFixed(0)}
+                      </span>
+                      <span style={{ fontWeight: 600, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        ₹{Number(item.total_price).toFixed(2)}
+                      </span>
+                    </div>
+                    {item.addons?.map((a, ai) => (
+                      <p key={ai} style={{ fontSize: 11, color: 'var(--ink4)', paddingLeft: 8, margin: 0 }}>
+                        + {a.addon_name} ₹{Number(a.price).toFixed(2)}
+                      </p>
+                    ))}
+                  </div>
                 ))}
-              </div>
-            ))}
+              </>
+            )}
 
             <p style={{ color: 'var(--border2)', margin: '8px 0' }}>{'━'.repeat(28)}</p>
 

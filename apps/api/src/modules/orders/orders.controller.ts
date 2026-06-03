@@ -21,6 +21,12 @@ export class OrdersController {
     return this.ordersService.getBySessionToken(token);
   }
 
+  // ─── Permanent table QR resolution (public) ─────────────────────────────
+  @Get('table-qr/:tableId')
+  getActiveSessionForTable(@Param('tableId') tableId: string) {
+    return this.ordersService.getActiveSessionByTableId(tableId);
+  }
+
   // ─── Group ordering via table session QR ────────────────────────────────
   @Get('table-session/:slug')
   getTableSession(@Param('slug') slug: string) {

@@ -252,10 +252,37 @@ export class BillingService {
   async getBill(id: string, restaurantId: string) {
     const bill = await this.prisma.bill.findFirst({
       where: { id, restaurant_id: restaurantId },
-      include: { order: { include: { items: { include: { addons: true } } } }, payments: true },
+      include: {
+        order: {
+          include: {
+            items: { include: { addons: true } },
+            table: { select: { id: true, name: true } },
+          },
+        },
+        payments: true,
+      },
     });
     if (!bill) throw new NotFoundException('Bill not found');
-    return bill;
+
+    // For session bills: attach session data with per-person orders
+    let sessionData: any = null;
+    if ((bill as any).table_session_id) {
+      sessionData = await (this.prisma as any).tableSession.findUnique({
+        where: { id: (bill as any).table_session_id },
+        include: {
+          table: { select: { id: true, name: true } },
+          orders: {
+            where: { deleted_at: null, status: { notIn: ['CANCELLED'] } },
+            orderBy: { created_at: 'asc' as const },
+            include: {
+              items: { where: { is_cancelled: false }, include: { addons: true } },
+            },
+          },
+        },
+      });
+    }
+
+    return { ...bill, sessionData };
   }
 
   async getBillPublic(id: string) {
