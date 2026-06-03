@@ -32,7 +32,12 @@ export class CreateCustomBillDto {
   @Type(() => CustomBillItemDto)
   items!: CustomBillItemDto[];
 
+  /** Flat ₹ discount entered manually */
   @IsOptional() @IsNumber() @Min(0) discount_amount?: number;
+  /** Apply a saved discount preset/coupon by its DB id */
+  @IsOptional() @IsString() discount_id?: string;
+  /** Apply by coupon code string (validated server-side) */
+  @IsOptional() @IsString() coupon_code?: string;
 
   @IsOptional()
   @IsIn(['CASH', 'UPI', 'CARD', 'ONLINE', 'COMPLIMENTARY'])

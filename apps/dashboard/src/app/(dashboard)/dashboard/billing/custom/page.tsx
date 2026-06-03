@@ -7,6 +7,25 @@ import { api } from '@/lib/api';
 import { useDashboardStore } from '@/lib/store';
 import { formatINR } from '@dineflow/utils';
 
+// ─── Discount preset type ─────────────────────────────────────────────────────
+
+interface DiscountPreset {
+  id: string;
+  name: string;
+  type: string;          // 'PERCENTAGE' | 'FIXED_AMOUNT'
+  value: number;
+  max_discount_cap?: number | null;
+  min_order_amount?: number | null;
+}
+
+interface AppliedDiscount {
+  kind: 'preset' | 'coupon';
+  id?: string;           // for preset
+  code?: string;         // for coupon
+  name: string;
+  serverAmount: number;  // server-computed ₹ saving (for coupons)
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface MenuVariant { id: string; name: string; price: number; is_default: boolean }
@@ -82,6 +101,11 @@ export default function CustomBillPage() {
     queryFn: () => api.get('/tables').then(r => r.data),
   });
 
+  const { data: presets = [] } = useQuery<DiscountPreset[]>({
+    queryKey: ['discount-presets'],
+    queryFn: () => api.get('/discounts/presets').then(r => r.data),
+  });
+
   // ── Menu search / browse state ────────────────────────────────────────
   const [menuSearch, setMenuSearch] = useState('');
   const [openCat, setOpenCat] = useState<string | null>(null);
@@ -104,7 +128,13 @@ export default function CustomBillPage() {
   const [orderType, setOrderType] = useState('WAITER_PLACED');
   const [covers,    setCovers]    = useState('1');
   const [billNote,  setBillNote]  = useState('');
-  const [discount,  setDiscount]  = useState('');
+
+  // ── Discount state ────────────────────────────────────────────────────────
+  const [appliedDiscount, setAppliedDiscount] = useState<AppliedDiscount | null>(null);
+  const [manualDiscount,  setManualDiscount]  = useState('');  // flat ₹ fallback
+  const [couponInput,     setCouponInput]     = useState('');
+  const [couponLoading,   setCouponLoading]   = useState(false);
+  const [couponError,     setCouponError]     = useState('');
 
   // ── Payment ────────────────────────────────────────────────────────────
   const [payNow,   setPayNow]   = useState(false);
@@ -116,15 +146,28 @@ export default function CustomBillPage() {
   const [submitErr,  setSubmitErr]  = useState('');
 
   // ── Derived totals ────────────────────────────────────────────────────
-  const gstRate   = Number(restaurant?.gst_rate ?? 0.05);
-  const subtotal  = cart.reduce((s, i) => s + i.unit_price * i.quantity, 0);
-  const cgst      = parseFloat((subtotal * gstRate / 2).toFixed(2));
-  const sgst      = parseFloat((subtotal * gstRate / 2).toFixed(2));
-  const discountAmt = Math.min(
-    Math.max(parseFloat(discount || '0') || 0, 0),
-    subtotal + cgst + sgst,
-  );
-  const total = parseFloat((subtotal + cgst + sgst - discountAmt).toFixed(2));
+  const gstRate  = Number(restaurant?.gst_rate ?? 0.05);
+  const subtotal = cart.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+  const cgst     = parseFloat((subtotal * gstRate / 2).toFixed(2));
+  const sgst     = parseFloat((subtotal * gstRate / 2).toFixed(2));
+  const gross    = subtotal + cgst + sgst;
+
+  // Compute client-side discount preview
+  const discountAmt = (() => {
+    if (appliedDiscount) {
+      if (appliedDiscount.kind === 'coupon') return Math.min(appliedDiscount.serverAmount, gross);
+      // preset: compute locally
+      const p = presets.find(x => x.id === appliedDiscount.id);
+      if (!p) return 0;
+      let amt = p.type === 'PERCENTAGE' ? (subtotal * p.value) / 100 : p.value;
+      if (p.max_discount_cap) amt = Math.min(amt, p.max_discount_cap);
+      return parseFloat(Math.min(amt, gross).toFixed(2));
+    }
+    const manual = Math.max(parseFloat(manualDiscount || '0') || 0, 0);
+    return Math.min(manual, gross);
+  })();
+
+  const total = parseFloat((gross - discountAmt).toFixed(2));
 
   // ── Filtered menu items ────────────────────────────────────────────────
   const filteredCats = useMemo(() => {
@@ -189,6 +232,40 @@ export default function CustomBillPage() {
     setCustomName(''); setCustomPrice(''); setCustomQty('1'); setCustomNote('');
   };
 
+  // ── Apply coupon code ──────────────────────────────────────────────────
+  const handleApplyCoupon = async () => {
+    const code = couponInput.trim().toUpperCase();
+    if (!code) return;
+    setCouponError('');
+    setCouponLoading(true);
+    try {
+      const res = await api.post('/discounts/validate', { code, order_amount: subtotal });
+      const { discount, discount_amount } = res.data;
+      setAppliedDiscount({
+        kind: 'coupon',
+        code: discount.code ?? code,
+        name: discount.name,
+        serverAmount: discount_amount,
+      });
+      setCouponInput('');
+    } catch (e: any) {
+      setCouponError(e?.response?.data?.message || 'Invalid coupon code');
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  // ── Apply preset ───────────────────────────────────────────────────────
+  const handleApplyPreset = (preset: DiscountPreset) => {
+    if (appliedDiscount?.id === preset.id) {
+      setAppliedDiscount(null); // toggle off
+    } else {
+      setAppliedDiscount({ kind: 'preset', id: preset.id, name: preset.name, serverAmount: 0 });
+      setManualDiscount('');
+    }
+    setCouponError('');
+  };
+
   // ── Validate phone ─────────────────────────────────────────────────────
   const phoneValid = !custPhone || /^\d{10}$/.test(custPhone.replace(/\s/g, ''));
   const gstinValid = !custGstin || /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(custGstin.toUpperCase());
@@ -204,6 +281,17 @@ export default function CustomBillPage() {
 
     setSubmitting(true);
     try {
+      // Build discount fields — only one of: discount_id, coupon_code, discount_amount
+      const discountFields: Record<string, unknown> = {};
+      if (appliedDiscount?.kind === 'preset' && appliedDiscount.id) {
+        discountFields.discount_id = appliedDiscount.id;
+      } else if (appliedDiscount?.kind === 'coupon' && appliedDiscount.code) {
+        discountFields.coupon_code = appliedDiscount.code;
+      } else {
+        const manual = Math.max(parseFloat(manualDiscount || '0') || 0, 0);
+        if (manual > 0) discountFields.discount_amount = manual;
+      }
+
       const res = await api.post('/billing/custom', {
         customer_name:   custName.trim() || undefined,
         customer_phone:  custPhone.trim() || undefined,
@@ -219,7 +307,7 @@ export default function CustomBillPage() {
           unit_price:   c.unit_price,
           notes:        c.notes || undefined,
         })),
-        discount_amount: discountAmt > 0 ? discountAmt : undefined,
+        ...discountFields,
         payment_method:  payNow ? payMethod : undefined,
         upi_txn_id:      (payNow && payMethod === 'UPI' && upiTxn.trim()) ? upiTxn.trim() : undefined,
       });
@@ -577,6 +665,108 @@ export default function CustomBillPage() {
             )}
           </div>
 
+          {/* ── Discount ── */}
+          <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)' }}>
+            <p style={{ ...sans, fontSize: 11, fontWeight: 700, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 10 }}>
+              Discount
+            </p>
+
+            {/* Applied discount badge */}
+            {appliedDiscount && (
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                background: '#F0FDF4', border: '1px solid #86EFAC',
+                borderRadius: 8, padding: '8px 12px', marginBottom: 10,
+              }}>
+                <div>
+                  <span style={{ ...sans, fontSize: 12, fontWeight: 600, color: '#166534' }}>
+                    {appliedDiscount.kind === 'coupon' ? '🎟' : '⚡'} {appliedDiscount.name}
+                  </span>
+                  {appliedDiscount.kind === 'coupon' && appliedDiscount.code && (
+                    <span style={{ ...sans, fontSize: 11, color: '#15803D', marginLeft: 6, background: '#DCFCE7', padding: '1px 7px', borderRadius: 10 }}>
+                      {appliedDiscount.code}
+                    </span>
+                  )}
+                  {discountAmt > 0 && (
+                    <p style={{ ...sans, fontSize: 11, color: '#15803D', marginTop: 2 }}>
+                      −₹{discountAmt.toFixed(2)} saved
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setAppliedDiscount(null)}
+                  style={{ ...sans, background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: '#86EFAC', lineHeight: 1 }}
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
+            {/* Quick preset chips */}
+            {!appliedDiscount && presets.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                {presets.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => handleApplyPreset(p)}
+                    style={{
+                      ...sans, padding: '5px 11px', borderRadius: 20, fontSize: 11, fontWeight: 600,
+                      border: '1px solid var(--border)',
+                      background: '#fff', color: 'var(--ink3)',
+                      cursor: 'pointer', transition: 'all 0.12s',
+                    }}
+                  >
+                    ⚡ {p.name} ({p.type === 'PERCENTAGE' ? `${p.value}%` : `₹${p.value}`})
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Coupon code input */}
+            {!appliedDiscount && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    placeholder="Coupon code"
+                    value={couponInput}
+                    onChange={e => { setCouponInput(e.target.value.toUpperCase()); setCouponError(''); }}
+                    onKeyDown={e => e.key === 'Enter' && handleApplyCoupon()}
+                    style={{ ...inputStyle, flex: 1, textTransform: 'uppercase', letterSpacing: '0.04em' }}
+                  />
+                  <button
+                    onClick={handleApplyCoupon}
+                    disabled={couponLoading || !couponInput.trim()}
+                    style={{
+                      ...sans, padding: '8px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                      background: couponInput.trim() ? 'var(--ink)' : 'var(--paper2)',
+                      color: couponInput.trim() ? '#fff' : 'var(--ink5)',
+                      border: 'none', cursor: couponInput.trim() ? 'pointer' : 'default',
+                      opacity: couponLoading ? 0.6 : 1, whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {couponLoading ? '…' : 'Apply'}
+                  </button>
+                </div>
+                {couponError && (
+                  <p style={{ ...sans, fontSize: 11, color: '#dc2626', marginTop: 4 }}>⚠ {couponError}</p>
+                )}
+              </div>
+            )}
+
+            {/* Manual flat discount (only shown when nothing else applied) */}
+            {!appliedDiscount && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)' }}>Or manual flat discount (₹)</span>
+                <input
+                  type="number" min="0" step="0.5" placeholder="0"
+                  value={manualDiscount}
+                  onChange={e => setManualDiscount(e.target.value)}
+                  style={{ ...mono, width: 80, textAlign: 'right', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px', fontSize: 12, color: '#dc2626' }}
+                />
+              </div>
+            )}
+          </div>
+
           {/* ── Totals ── */}
           <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, ...mono, fontSize: 12 }}>
@@ -591,21 +781,9 @@ export default function CustomBillPage() {
                   <span>{label}</span><span>₹{value.toFixed(2)}</span>
                 </div>
               ))}
-
-              {/* Discount input */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
-                <span style={{ color: 'var(--ink4)' }}>Discount (₹)</span>
-                <input
-                  type="number" min="0" step="0.5"
-                  placeholder="0"
-                  value={discount}
-                  onChange={e => setDiscount(e.target.value)}
-                  style={{ ...mono, width: 80, textAlign: 'right', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px', fontSize: 12, color: '#dc2626' }}
-                />
-              </div>
               {discountAmt > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#dc2626' }}>
-                  <span>Applied</span><span>-₹{discountAmt.toFixed(2)}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#16a34a', fontWeight: 600 }}>
+                  <span>Discount</span><span>−₹{discountAmt.toFixed(2)}</span>
                 </div>
               )}
             </div>

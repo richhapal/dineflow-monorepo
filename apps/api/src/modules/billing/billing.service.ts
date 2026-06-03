@@ -5,6 +5,7 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RecordPaymentDto } from './dto/record-payment.dto';
 import { CreateCustomBillDto } from './dto/create-custom-bill.dto';
+import { DiscountsService } from '../discounts/discounts.service';
 import { formatInvoiceNumber, getFinancialYear } from '@dineflow/utils';
 import { HSN_CODE } from '@dineflow/config';
 import * as Papa from 'papaparse';
@@ -13,10 +14,15 @@ import * as Papa from 'papaparse';
 export class BillingService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly discountsService: DiscountsService,
     @InjectQueue('notifications') private readonly notificationsQueue: Queue,
   ) {}
 
-  async generateBill(orderId: string, restaurantId: string) {
+  async generateBill(
+    orderId: string,
+    restaurantId: string,
+    discountOpts?: { discount_id?: string; coupon_code?: string; discount_amount?: number },
+  ) {
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, restaurant_id: restaurantId },
       include: { items: { include: { addons: true } } },
@@ -29,6 +35,39 @@ export class BillingService {
     // Check if bill already exists
     const existingBill = await this.prisma.bill.findUnique({ where: { order_id: orderId } });
     if (existingBill) return existingBill;
+
+    // ── Resolve billing-time discount ─────────────────────────────────────
+    let billingDiscount = 0;
+    let discountId: string | null = null;
+    const orderSubtotal = Number(order.subtotal);
+    const orderTotal    = Number(order.total_amount);
+
+    if (discountOpts?.coupon_code) {
+      const result = await this.discountsService.validateCoupon(
+        { code: discountOpts.coupon_code, order_amount: orderSubtotal },
+        restaurantId,
+      );
+      billingDiscount = result.discount_amount;
+      discountId      = result.discount.id;
+    } else if (discountOpts?.discount_id) {
+      const d = await this.prisma.discount.findFirst({
+        where: { id: discountOpts.discount_id, restaurant_id: restaurantId, is_active: true, deleted_at: null },
+      });
+      if (!d) throw new BadRequestException('Discount not found or inactive');
+      if (d.min_order_amount && orderSubtotal < Number(d.min_order_amount)) {
+        throw new BadRequestException(`Minimum order of ₹${Number(d.min_order_amount).toFixed(0)} required`);
+      }
+      billingDiscount = this.discountsService.computeDiscountAmount(d, orderSubtotal);
+      discountId      = d.id;
+    } else if (discountOpts?.discount_amount && discountOpts.discount_amount > 0) {
+      billingDiscount = Math.min(Math.max(discountOpts.discount_amount, 0), orderTotal);
+    }
+
+    // Billing discount overrides any order-level discount; if none given, fall back to order's
+    const finalDiscount = billingDiscount > 0 ? billingDiscount : Number(order.discount_amount);
+    const finalTotal    = billingDiscount > 0
+      ? parseFloat((orderTotal - billingDiscount).toFixed(2))
+      : orderTotal;
 
     // Atomic invoice sequence increment
     const restaurant = await this.prisma.$transaction(async (tx) => {
@@ -60,12 +99,17 @@ export class BillingService {
         sgst_rate: halfRate,
         sgst_amount: order.sgst_amount,
         service_charge: order.service_charge,
-        discount_amount: order.discount_amount,
-        total_amount: order.total_amount,
+        discount_amount: finalDiscount,
+        total_amount: finalTotal,
         hsn_code: HSN_CODE,
         status: 'GENERATED',
       },
     });
+
+    // Increment coupon usage (non-critical, outside transaction)
+    if (discountId && discountOpts?.coupon_code) {
+      await this.discountsService.incrementUsage(discountId).catch(() => {});
+    }
 
     // Enqueue WhatsApp if enabled
     if (restaurant.whatsapp_bill && order.customer_phone) {
@@ -140,7 +184,11 @@ export class BillingService {
   }
 
   /** Generate ONE consolidated bill for a manually selected set of orders */
-  async generateCombinedBill(orderIds: string[], restaurantId: string) {
+  async generateCombinedBill(
+    orderIds: string[],
+    restaurantId: string,
+    discountOpts?: { discount_id?: string; coupon_code?: string; discount_amount?: number },
+  ) {
     if (!orderIds || orderIds.length === 0) throw new BadRequestException('No orders provided');
 
     // 1. Load all orders
@@ -182,6 +230,37 @@ export class BillingService {
       : names.length === 1
         ? names[0]
         : `${names[0]} + ${names.length - 1} more`;
+
+    // ── Resolve billing-time discount for combined bill ───────────────────
+    let billingCombinedDiscount = 0;
+    let combinedDiscountId: string | null = null;
+
+    if (discountOpts?.coupon_code) {
+      const result = await this.discountsService.validateCoupon(
+        { code: discountOpts.coupon_code, order_amount: subtotal },
+        restaurantId,
+      );
+      billingCombinedDiscount = result.discount_amount;
+      combinedDiscountId      = result.discount.id;
+    } else if (discountOpts?.discount_id) {
+      const d = await this.prisma.discount.findFirst({
+        where: { id: discountOpts.discount_id, restaurant_id: restaurantId, is_active: true, deleted_at: null },
+      });
+      if (!d) throw new BadRequestException('Discount not found or inactive');
+      if (d.min_order_amount && subtotal < Number(d.min_order_amount)) {
+        throw new BadRequestException(`Minimum order of ₹${Number(d.min_order_amount).toFixed(0)} required`);
+      }
+      billingCombinedDiscount = this.discountsService.computeDiscountAmount(d, subtotal);
+      combinedDiscountId      = d.id;
+    } else if (discountOpts?.discount_amount && discountOpts.discount_amount > 0) {
+      billingCombinedDiscount = Math.min(Math.max(discountOpts.discount_amount, 0), totalAmount);
+    }
+
+    // Use billing-time discount if given; otherwise keep order-aggregated discounts
+    const finalCombinedDiscount = billingCombinedDiscount > 0 ? billingCombinedDiscount : discountAmount;
+    const finalCombinedTotal    = billingCombinedDiscount > 0
+      ? parseFloat((totalAmount - billingCombinedDiscount).toFixed(2))
+      : totalAmount;
 
     const bill = await this.prisma.$transaction(async (tx) => {
       const restaurant = await tx.restaurant.update({
@@ -238,8 +317,8 @@ export class BillingService {
           sgst_rate: halfRate,
           sgst_amount: sgstAmount,
           service_charge: serviceCharge,
-          discount_amount: discountAmount,
-          total_amount: totalAmount,
+          discount_amount: finalCombinedDiscount,
+          total_amount: finalCombinedTotal,
           hsn_code: HSN_CODE,
           status: 'GENERATED',
         } as any,
@@ -260,7 +339,12 @@ export class BillingService {
       return newBill;
     });
 
-    return { bill, totalAmount, orderCount: orders.length };
+    // Increment coupon usage (non-critical, outside transaction)
+    if (combinedDiscountId && discountOpts?.coupon_code) {
+      await this.discountsService.incrementUsage(combinedDiscountId).catch(() => {});
+    }
+
+    return { bill, totalAmount: finalCombinedTotal, orderCount: orders.length };
   }
 
   async checkoutTable(tableId: string, restaurantId: string, paymentMethod: string) {
@@ -416,10 +500,43 @@ export class BillingService {
     const halfRate    = gstRate / 2;
     const cgstAmount  = parseFloat((subtotal * halfRate).toFixed(2));
     const sgstAmount  = parseFloat((subtotal * halfRate).toFixed(2));
-    const scRate      = Number(restaurant.service_charge_rate ?? 0);
+    const scRate      = Number((restaurant as any).service_charge_rate ?? 0);
     const serviceCharge = parseFloat((subtotal * scRate).toFixed(2));
-    const discount    = Math.min(Math.max(dto.discount_amount ?? 0, 0), subtotal + cgstAmount + sgstAmount + serviceCharge);
-    const total       = parseFloat((subtotal + cgstAmount + sgstAmount + serviceCharge - discount).toFixed(2));
+    const preTaxTotal = subtotal + cgstAmount + sgstAmount + serviceCharge;
+
+    // ── Resolve discount ──────────────────────────────────────────────────
+    let discountObj: any = null;
+    let discountId: string | null = null;
+
+    if (dto.coupon_code) {
+      // Validate coupon code
+      const result = await this.discountsService.validateCoupon(
+        { code: dto.coupon_code, order_amount: subtotal },
+        restaurantId,
+      );
+      discountObj  = result.discount;
+      discountId   = result.discount.id;
+    } else if (dto.discount_id) {
+      // Apply a preset discount by ID
+      const d = await this.prisma.discount.findFirst({
+        where: { id: dto.discount_id, restaurant_id: restaurantId, is_active: true, deleted_at: null },
+      });
+      if (!d) throw new BadRequestException('Discount not found or inactive');
+      if (d.min_order_amount && subtotal < Number(d.min_order_amount)) {
+        throw new BadRequestException(`Minimum order of ₹${Number(d.min_order_amount).toFixed(0)} required`);
+      }
+      discountObj = d;
+      discountId  = d.id;
+    }
+
+    let discount: number;
+    if (discountObj) {
+      discount = this.discountsService.computeDiscountAmount(discountObj, subtotal);
+    } else {
+      discount = Math.min(Math.max(dto.discount_amount ?? 0, 0), preTaxTotal);
+    }
+
+    const total = parseFloat((preTaxTotal - discount).toFixed(2));
 
     // ── 5. Transactional creation ─────────────────────────────────────────
     const bill = await this.prisma.$transaction(async (tx) => {
@@ -486,6 +603,21 @@ export class BillingService {
         },
       });
 
+      // Record applied discount for audit trail
+      if (discountId && discountObj && discount > 0) {
+        await tx.appliedDiscount.create({
+          data: {
+            order_id:       order.id,
+            discount_id:    discountId,
+            restaurant_id:  restaurantId,
+            discount_name:  discountObj.name,
+            discount_type:  discountObj.type as any,
+            discount_value: Number(discountObj.value),
+            amount_saved:   discount,
+          },
+        });
+      }
+
       // Collect payment immediately if method provided
       if (dto.payment_method) {
         await tx.payment.create({
@@ -508,7 +640,73 @@ export class BillingService {
       return newBill;
     });
 
+    // Increment usage counter for coupon codes (outside transaction — non-critical)
+    if (discountId && dto.coupon_code) {
+      await this.discountsService.incrementUsage(discountId).catch(() => {});
+    }
+
     return bill;
+  }
+
+  /** Apply or update a discount on an already-generated bill (GENERATED only, not PAID/CANCELLED) */
+  async applyDiscountToBill(
+    billId: string,
+    restaurantId: string,
+    opts: { discount_id?: string; coupon_code?: string; discount_amount?: number; remove?: boolean },
+  ) {
+    const bill = await this.prisma.bill.findFirst({
+      where: { id: billId, restaurant_id: restaurantId },
+    });
+    if (!bill) throw new NotFoundException('Bill not found');
+    if (bill.status === 'PAID')      throw new BadRequestException('Cannot modify a PAID bill');
+    if (bill.status === 'CANCELLED') throw new BadRequestException('Cannot modify a CANCELLED bill');
+
+    // Gross = everything before discount
+    const gross = Number(bill.subtotal) + Number(bill.cgst_amount) + Number(bill.sgst_amount) + Number(bill.service_charge);
+
+    let discountAmt = 0;
+    let discountId: string | null = null;
+
+    if (opts.remove) {
+      discountAmt = 0; // explicitly remove the discount
+    } else if (opts.coupon_code) {
+      const result = await this.discountsService.validateCoupon(
+        { code: opts.coupon_code, order_amount: Number(bill.subtotal) },
+        restaurantId,
+      );
+      discountAmt = result.discount_amount;
+      discountId  = result.discount.id;
+    } else if (opts.discount_id) {
+      const d = await this.prisma.discount.findFirst({
+        where: { id: opts.discount_id, restaurant_id: restaurantId, is_active: true, deleted_at: null },
+      });
+      if (!d) throw new BadRequestException('Discount not found or inactive');
+      if (d.min_order_amount && Number(bill.subtotal) < Number(d.min_order_amount)) {
+        throw new BadRequestException(`Minimum order of ₹${Number(d.min_order_amount).toFixed(0)} required`);
+      }
+      discountAmt = this.discountsService.computeDiscountAmount(d, Number(bill.subtotal));
+      discountId  = d.id;
+    } else if (opts.discount_amount !== undefined) {
+      discountAmt = Math.min(Math.max(opts.discount_amount, 0), gross);
+    }
+
+    const newTotal = parseFloat((gross - discountAmt).toFixed(2));
+
+    const updated = await this.prisma.bill.update({
+      where: { id: billId },
+      data: {
+        discount_amount: discountAmt,
+        total_amount:    newTotal,
+      },
+      include: { order: { include: { items: { include: { addons: true } }, table: { select: { id: true, name: true } } } }, payments: true },
+    });
+
+    // Increment coupon usage (non-critical)
+    if (discountId && opts.coupon_code) {
+      await this.discountsService.incrementUsage(discountId).catch(() => {});
+    }
+
+    return updated;
   }
 
   async cancelBill(billId: string, restaurantId: string) {

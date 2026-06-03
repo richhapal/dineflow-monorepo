@@ -23,8 +23,12 @@ export class BillingController {
   @Post('generate/:orderId')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()
-  generate(@CurrentUser() user: any, @Param('orderId') orderId: string) {
-    return this.billingService.generateBill(orderId, user.restaurant_id);
+  generate(
+    @CurrentUser() user: any,
+    @Param('orderId') orderId: string,
+    @Body() body?: { discount_id?: string; coupon_code?: string; discount_amount?: number },
+  ) {
+    return this.billingService.generateBill(orderId, user.restaurant_id, body);
   }
 
   @Get()
@@ -76,9 +80,13 @@ export class BillingController {
   @ApiBearerAuth()
   generateCombined(
     @CurrentUser() user: any,
-    @Body() body: { order_ids: string[] },
+    @Body() body: { order_ids: string[]; discount_id?: string; coupon_code?: string; discount_amount?: number },
   ) {
-    return this.billingService.generateCombinedBill(body.order_ids, user.restaurant_id);
+    return this.billingService.generateCombinedBill(body.order_ids, user.restaurant_id, {
+      discount_id: body.discount_id,
+      coupon_code: body.coupon_code,
+      discount_amount: body.discount_amount,
+    });
   }
 
   @Post('custom')
@@ -126,6 +134,17 @@ export class BillingController {
   @ApiBearerAuth()
   recordPayment(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: RecordPaymentDto) {
     return this.billingService.recordPayment(id, dto, user.restaurant_id);
+  }
+
+  @Post(':id/apply-discount')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  applyDiscount(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() body: { discount_id?: string; coupon_code?: string; discount_amount?: number; remove?: boolean },
+  ) {
+    return this.billingService.applyDiscountToBill(id, user.restaurant_id, body);
   }
 
   @Post(':id/cancel')

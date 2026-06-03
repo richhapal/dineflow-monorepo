@@ -345,13 +345,27 @@ function InvoicePanel({
   onClose: () => void;
   onRefetch: () => void;
 }) {
-  const [showPayModal, setShowPayModal] = useState(false);
-  const [cancelConfirm, setCancelConfirm] = useState(false);
+  const [showPayModal,      setShowPayModal]      = useState(false);
+  const [cancelConfirm,     setCancelConfirm]     = useState(false);
+  const [showDiscountPanel, setShowDiscountPanel] = useState(false);
   const qc = useQueryClient();
+
+  // ── Discount panel state ────────────────────────────────────────────────
+  const [dSel,          setDSel]          = useState<{ kind: 'preset' | 'coupon' | 'manual'; id?: string; code?: string; name: string; amount: number } | null>(null);
+  const [dManual,       setDManual]       = useState('');
+  const [dCouponInput,  setDCouponInput]  = useState('');
+  const [dCouponErr,    setDCouponErr]    = useState('');
+  const [dCouponLoading, setDCouponLoading] = useState(false);
 
   const { data: bill, isLoading } = useQuery<Bill>({
     queryKey: ['bill', billId],
     queryFn: () => api.get(`/billing/${billId}`).then(r => r.data),
+  });
+
+  const { data: discountPresets = [] } = useQuery<GenPreset[]>({
+    queryKey: ['discount-presets'],
+    queryFn: () => api.get('/discounts/presets').then(r => r.data),
+    enabled: showDiscountPanel,
   });
 
   const cancelMutation = useMutation({
@@ -359,10 +373,47 @@ function InvoicePanel({
     onSuccess: () => { onRefetch(); qc.invalidateQueries({ queryKey: ['bill', billId] }); setCancelConfirm(false); onClose(); },
   });
 
+  const applyDiscountMutation = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => api.post(`/billing/${billId}/apply-discount`, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bill', billId] });
+      onRefetch();
+      setShowDiscountPanel(false);
+      setDSel(null); setDManual(''); setDCouponInput(''); setDCouponErr('');
+    },
+  });
+
   const whatsappMutation = useMutation({
     mutationFn: () => api.post(`/billing/${billId}/send-whatsapp`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['bill', billId] }),
   });
+
+  const handleApplyDiscountCoupon = async () => {
+    const code = dCouponInput.trim().toUpperCase();
+    if (!code || !bill) return;
+    setDCouponErr(''); setDCouponLoading(true);
+    try {
+      const res = await api.post('/discounts/validate', { code, order_amount: Number(bill.subtotal) });
+      const { discount, discount_amount } = res.data;
+      setDSel({ kind: 'coupon', code: discount.code ?? code, name: discount.name, amount: discount_amount });
+      setDCouponInput('');
+    } catch (e: any) {
+      setDCouponErr(e?.response?.data?.message || 'Invalid coupon code');
+    } finally {
+      setDCouponLoading(false);
+    }
+  };
+
+  const handleConfirmDiscount = () => {
+    if (!bill) return;
+    const gross = Number(bill.subtotal) + Number(bill.cgst_amount) + Number(bill.sgst_amount) + Number(bill.service_charge);
+    if (dSel?.kind === 'preset')  applyDiscountMutation.mutate({ discount_id: dSel.id });
+    else if (dSel?.kind === 'coupon') applyDiscountMutation.mutate({ coupon_code: dSel.code });
+    else {
+      const m = Math.min(Math.max(parseFloat(dManual || '0') || 0, 0), gross);
+      applyDiscountMutation.mutate({ discount_amount: m });
+    }
+  };
 
   const handlePrint = useCallback(() => {
     if (!bill) return;
@@ -516,16 +567,242 @@ ${restaurant?.upi_id ? `<p>UPI: ${restaurant.upi_id}</p>` : ''}
   const cgstPct = fmtPct(subtotalNum > 0 ? (Number(bill.cgst_amount) / subtotalNum * 100) : Number(bill.cgst_rate) * 100);
   const sgstPct = fmtPct(subtotalNum > 0 ? (Number(bill.sgst_amount) / subtotalNum * 100) : Number(bill.sgst_rate) * 100);
 
+  // Preview: computed savings for the discount panel display
+  const dPreviewAmt = (() => {
+    if (!bill) return 0;
+    if (dSel?.kind === 'preset') {
+      const p = discountPresets.find(x => x.id === dSel.id);
+      if (!p) return dSel.amount;
+      let a = p.type === 'PERCENTAGE' ? (Number(bill.subtotal) * p.value) / 100 : p.value;
+      if (p.max_discount_cap) a = Math.min(a, p.max_discount_cap);
+      return parseFloat(Math.min(a, Number(bill.total_amount)).toFixed(2));
+    }
+    if (dSel) return dSel.amount;
+    const m = parseFloat(dManual || '0') || 0;
+    return Math.min(m, Number(bill.total_amount));
+  })();
+
   return (
     <>
       {/* Backdrop */}
       <div
-        onClick={onClose}
+        onClick={() => { onClose(); setShowDiscountPanel(false); }}
         style={{
           position: 'fixed', inset: 0, zIndex: 49,
-          background: 'rgba(0,0,0,0.18)',
+          background: showDiscountPanel ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.18)',
+          transition: 'background 0.2s',
         }}
       />
+
+      {/* ── Left-side Discount Panel ── */}
+      {showDiscountPanel && bill && (
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'fixed', top: 56, bottom: 0, right: 420,
+            width: 340, zIndex: 50,
+            background: '#fff', borderLeft: '1px solid var(--border)',
+            boxShadow: '-8px 0 32px rgba(0,0,0,0.1)',
+            display: 'flex', flexDirection: 'column',
+            animation: 'slideInLeft 0.2s ease',
+          }}
+        >
+          {/* Header */}
+          <div style={{
+            padding: '16px 20px', borderBottom: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
+          }}>
+            <div>
+              <p style={{ ...sans, fontSize: 15, fontWeight: 700, color: 'var(--ink)' }}>🏷 Apply Discount</p>
+              <p style={{ ...mono, fontSize: 12, color: 'var(--ink4)', marginTop: 2 }}>
+                Bill total: {formatINR(Number(bill.total_amount))}
+                {dPreviewAmt > 0 && (
+                  <span style={{ color: '#16a34a', marginLeft: 6 }}>
+                    → {formatINR(parseFloat((Number(bill.total_amount) - dPreviewAmt).toFixed(2)))}
+                  </span>
+                )}
+              </p>
+            </div>
+            <button
+              onClick={() => { setShowDiscountPanel(false); setDSel(null); setDManual(''); setDCouponInput(''); setDCouponErr(''); }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: 'var(--ink4)', lineHeight: 1 }}
+            >×</button>
+          </div>
+
+          {/* Scrollable content */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+            {/* Existing discount info */}
+            {Number(bill.discount_amount) > 0 && (
+              <div style={{
+                background: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: 10, padding: '12px 14px',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              }}>
+                <div>
+                  <p style={{ ...sans, fontSize: 12, fontWeight: 600, color: '#166534' }}>
+                    Current discount
+                  </p>
+                  <p style={{ ...mono, fontSize: 13, color: '#15803D', fontWeight: 700 }}>
+                    −{formatINR(Number(bill.discount_amount))}
+                  </p>
+                </div>
+                <button
+                  onClick={() => applyDiscountMutation.mutate({ remove: true })}
+                  disabled={applyDiscountMutation.isPending}
+                  style={{
+                    ...sans, padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                    background: '#FEF2F2', color: '#dc2626', border: '1px solid rgba(220,38,38,0.2)',
+                    cursor: 'pointer', opacity: applyDiscountMutation.isPending ? 0.6 : 1,
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+
+            {/* Applied selection badge */}
+            {dSel && (
+              <div style={{
+                background: '#EFF6FF', border: '1px solid #93C5FD', borderRadius: 10, padding: '10px 14px',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              }}>
+                <div>
+                  <p style={{ ...sans, fontSize: 12, fontWeight: 600, color: '#1D4ED8' }}>
+                    {dSel.kind === 'coupon' ? '🎟' : '⚡'} {dSel.name}
+                    {dSel.code && <span style={{ marginLeft: 6, fontSize: 11, background: '#DBEAFE', padding: '1px 6px', borderRadius: 8 }}>{dSel.code}</span>}
+                  </p>
+                  <p style={{ ...mono, fontSize: 12, color: '#2563EB', marginTop: 2 }}>−{formatINR(dPreviewAmt)} will be saved</p>
+                </div>
+                <button onClick={() => setDSel(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: '#93C5FD' }}>×</button>
+              </div>
+            )}
+
+            {/* Quick preset chips */}
+            {!dSel && discountPresets.length > 0 && (
+              <div>
+                <p style={{ ...sans, fontSize: 11, fontWeight: 700, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+                  Quick Presets
+                </p>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {discountPresets.map(p => {
+                    let a = p.type === 'PERCENTAGE' ? (Number(bill.subtotal) * p.value) / 100 : p.value;
+                    if (p.max_discount_cap) a = Math.min(a, p.max_discount_cap);
+                    const amt = parseFloat(Math.min(a, Number(bill.total_amount)).toFixed(2));
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => { setDSel({ kind: 'preset', id: p.id, name: p.name, amount: amt }); setDManual(''); setDCouponInput(''); }}
+                        style={{
+                          ...sans, padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+                          border: '1px solid var(--border)', background: '#fff', color: 'var(--ink3)',
+                          cursor: 'pointer', transition: 'all 0.12s',
+                        }}
+                      >
+                        ⚡ {p.name}
+                        <span style={{ ...mono, marginLeft: 4, color: 'var(--ink4)' }}>
+                          ({p.type === 'PERCENTAGE' ? `${p.value}%` : `₹${p.value}`})
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Coupon code */}
+            {!dSel && (
+              <div>
+                <p style={{ ...sans, fontSize: 11, fontWeight: 700, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+                  Coupon Code
+                </p>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    placeholder="Enter code…"
+                    value={dCouponInput}
+                    onChange={e => { setDCouponInput(e.target.value.toUpperCase()); setDCouponErr(''); }}
+                    onKeyDown={e => e.key === 'Enter' && handleApplyDiscountCoupon()}
+                    style={{
+                      ...sans, flex: 1, padding: '9px 12px', borderRadius: 8,
+                      border: `1px solid ${dCouponErr ? '#dc2626' : 'var(--border)'}`,
+                      fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.04em',
+                      outline: 'none', color: 'var(--ink)',
+                    }}
+                  />
+                  <button
+                    onClick={handleApplyDiscountCoupon}
+                    disabled={dCouponLoading || !dCouponInput.trim()}
+                    style={{
+                      ...sans, padding: '9px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                      background: dCouponInput.trim() ? 'var(--ink)' : 'var(--paper2)',
+                      color: dCouponInput.trim() ? '#fff' : 'var(--ink5)',
+                      border: 'none', cursor: dCouponInput.trim() ? 'pointer' : 'default',
+                      opacity: dCouponLoading ? 0.6 : 1,
+                    }}
+                  >
+                    {dCouponLoading ? '…' : 'Apply'}
+                  </button>
+                </div>
+                {dCouponErr && (
+                  <p style={{ ...sans, fontSize: 12, color: '#dc2626', marginTop: 4 }}>⚠ {dCouponErr}</p>
+                )}
+              </div>
+            )}
+
+            {/* Manual flat discount */}
+            {!dSel && (
+              <div>
+                <p style={{ ...sans, fontSize: 11, fontWeight: 700, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+                  Custom Flat Discount (₹)
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <input
+                    type="number" min="0" step="1" placeholder="0"
+                    value={dManual}
+                    onChange={e => setDManual(e.target.value)}
+                    style={{
+                      ...mono, flex: 1, padding: '9px 12px', borderRadius: 8,
+                      border: '1px solid var(--border)', fontSize: 14, color: '#dc2626',
+                      outline: 'none',
+                    }}
+                  />
+                  {parseFloat(dManual || '0') > 0 && (
+                    <span style={{ ...mono, fontSize: 12, color: '#dc2626', whiteSpace: 'nowrap' }}>
+                      −{formatINR(Math.min(parseFloat(dManual), Number(bill.total_amount)))}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Footer: Apply button */}
+          <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+            {applyDiscountMutation.isError && (
+              <p style={{ ...sans, fontSize: 12, color: '#dc2626', marginBottom: 8 }}>
+                ⚠ {(applyDiscountMutation.error as any)?.response?.data?.message || 'Failed to apply discount'}
+              </p>
+            )}
+            <button
+              onClick={handleConfirmDiscount}
+              disabled={applyDiscountMutation.isPending || (!dSel && !parseFloat(dManual || '0'))}
+              style={{
+                ...sans, width: '100%', padding: '11px', borderRadius: 8,
+                background: (dSel || parseFloat(dManual || '0') > 0) ? '#16a34a' : 'var(--paper3)',
+                color: (dSel || parseFloat(dManual || '0') > 0) ? '#fff' : 'var(--ink4)',
+                border: 'none', fontSize: 14, fontWeight: 700,
+                cursor: (dSel || parseFloat(dManual || '0') > 0) ? 'pointer' : 'not-allowed',
+                opacity: applyDiscountMutation.isPending ? 0.7 : 1,
+              }}
+            >
+              {applyDiscountMutation.isPending
+                ? '⏳ Applying…'
+                : dPreviewAmt > 0
+                  ? `✓ Apply −${formatINR(dPreviewAmt)} Discount`
+                  : 'Select a discount above'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* On-screen panel — fixed right drawer */}
       <div style={{
@@ -750,6 +1027,26 @@ ${restaurant?.upi_id ? `<p>UPI: ${restaurant.upi_id}</p>` : ''}
             </div>
           )}
 
+          {/* Apply / edit discount — only on non-paid non-cancelled bills */}
+          {bill.status !== 'PAID' && bill.status !== 'CANCELLED' && (
+            <button
+              onClick={() => setShowDiscountPanel(p => !p)}
+              style={{
+                ...sans, width: '100%', padding: '9px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                cursor: 'pointer',
+                ...(showDiscountPanel
+                  ? { background: '#EFF6FF', color: '#1D4ED8', border: '1.5px solid #93C5FD' }
+                  : Number(bill.discount_amount) > 0
+                    ? { background: '#F0FDF4', color: '#15803D', border: '1.5px solid #86EFAC' }
+                    : { background: 'transparent', color: 'var(--ink3)', border: '1.5px solid var(--border2)' }),
+              }}
+            >
+              {Number(bill.discount_amount) > 0
+                ? `🏷 Discount: −${formatINR(Number(bill.discount_amount))}`
+                : '🏷 Apply Discount'}
+            </button>
+          )}
+
           {/* Secondary actions */}
           <div style={{ display: 'flex', gap: 8 }}>
             <button
@@ -831,6 +1128,27 @@ ${restaurant?.upi_id ? `<p>UPI: ${restaurant.upi_id}</p>` : ''}
   );
 }
 
+// ─── Types for pre-generate discount flow ────────────────────────────────────
+
+interface PendingGen {
+  kind: 'single' | 'combined';
+  orderId?: string;
+  orderIds?: string[];
+  key: string;
+  label: string;
+  gross: number;
+}
+
+interface DiscountSel {
+  kind: 'preset' | 'coupon';
+  id?: string;
+  code?: string;
+  name: string;
+  amount: number;
+}
+
+interface GenPreset { id: string; name: string; type: string; value: number; max_discount_cap?: number | null; min_order_amount?: number | null }
+
 // ─── Unbilled Orders Tab ──────────────────────────────────────────────────────
 
 function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void }) {
@@ -840,26 +1158,76 @@ function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void })
     queryFn: () => api.get('/billing/unbilled-orders').then(r => r.data),
   });
 
-  // Track which group/order is generating: key = tableId or orderId
-  const [generating, setGenerating] = useState<string | null>(null);
+  const { data: presets = [] } = useQuery<GenPreset[]>({
+    queryKey: ['discount-presets'],
+    queryFn: () => api.get('/discounts/presets').then(r => r.data),
+  });
 
-  const generateSingle = async (orderId: string) => {
-    setGenerating(orderId);
+  // ── Pre-generate discount picker state ──────────────────────────────────
+  const [pending,        setPending]       = useState<PendingGen | null>(null);
+  const [discountSel,    setDiscountSel]   = useState<DiscountSel | null>(null);
+  const [manualDiscount, setManualDiscount] = useState('');
+  const [couponInput,    setCouponInput]   = useState('');
+  const [couponLoading,  setCouponLoading] = useState(false);
+  const [couponError,    setCouponError]   = useState('');
+  const [generating,     setGenerating]    = useState<string | null>(null);
+
+  // Computed discount ₹ for display in the modal
+  const discountAmt = (() => {
+    if (discountSel) return discountSel.amount;
+    const m = parseFloat(manualDiscount || '0') || 0;
+    return pending ? Math.min(m, pending.gross) : 0;
+  })();
+
+  // ── Open the picker ──────────────────────────────────────────────────────
+  const openPicker = (p: PendingGen) => {
+    setPending(p);
+    setDiscountSel(null);
+    setManualDiscount('');
+    setCouponInput('');
+    setCouponError('');
+  };
+
+  // ── Apply coupon inside picker ────────────────────────────────────────────
+  const handleCouponApply = async () => {
+    if (!pending) return;
+    const code = couponInput.trim().toUpperCase();
+    if (!code) return;
+    setCouponError('');
+    setCouponLoading(true);
     try {
-      await api.post(`/billing/generate/${orderId}`, {});
-      qc.invalidateQueries({ queryKey: ['unbilled-orders'] });
-      onBillGenerated();
+      const res = await api.post('/discounts/validate', { code, order_amount: pending.gross });
+      const { discount, discount_amount } = res.data;
+      setDiscountSel({ kind: 'coupon', code: discount.code ?? code, name: discount.name, amount: discount_amount });
+      setCouponInput('');
+    } catch (e: any) {
+      setCouponError(e?.response?.data?.message || 'Invalid coupon code');
     } finally {
-      setGenerating(null);
+      setCouponLoading(false);
     }
   };
 
-  const generateCombined = async (orderIds: string[], key: string) => {
-    setGenerating(key);
+  // ── Confirm generate ─────────────────────────────────────────────────────
+  const confirmGenerate = async () => {
+    if (!pending) return;
+    setGenerating(pending.key);
+    const discountPayload: Record<string, unknown> = {};
+    if (discountSel?.kind === 'preset' && discountSel.id)   discountPayload.discount_id  = discountSel.id;
+    else if (discountSel?.kind === 'coupon' && discountSel.code) discountPayload.coupon_code = discountSel.code;
+    else {
+      const m = parseFloat(manualDiscount || '0') || 0;
+      if (m > 0) discountPayload.discount_amount = m;
+    }
+
     try {
-      await api.post('/billing/generate-combined', { order_ids: orderIds });
+      if (pending.kind === 'single' && pending.orderId) {
+        await api.post(`/billing/generate/${pending.orderId}`, discountPayload);
+      } else if (pending.kind === 'combined' && pending.orderIds) {
+        await api.post('/billing/generate-combined', { order_ids: pending.orderIds, ...discountPayload });
+      }
       qc.invalidateQueries({ queryKey: ['unbilled-orders'] });
       onBillGenerated();
+      setPending(null);
     } finally {
       setGenerating(null);
     }
@@ -946,16 +1314,20 @@ function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void })
           {/* Individual button only when NOT inside a table group */}
           {!indent && (
             <button
-              onClick={() => generateSingle(order.id)}
-              disabled={generating === order.id}
+              onClick={() => openPicker({
+                kind: 'single', orderId: order.id, key: order.id,
+                label: `Order #${String(order.order_number ?? 0).padStart(2, '0')}`,
+                gross: Number(order.total_amount),
+              })}
+              disabled={!!generating}
               style={{
                 ...sans, padding: '7px 14px', borderRadius: 8,
                 background: 'var(--accent)', color: '#fff', border: 'none',
                 fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                opacity: generating === order.id ? 0.6 : 1, whiteSpace: 'nowrap',
+                opacity: generating ? 0.6 : 1, whiteSpace: 'nowrap',
               }}
             >
-              {generating === order.id ? 'Generating…' : '+ Bill'}
+              + Bill
             </button>
           )}
         </div>
@@ -966,13 +1338,175 @@ function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void })
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
+      {/* ── Discount picker modal ── */}
+      {pending && (
+        <>
+          {/* Backdrop */}
+          <div
+            onClick={() => setPending(null)}
+            style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.3)' }}
+          />
+          {/* Modal */}
+          <div style={{
+            position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+            zIndex: 61, width: 380, background: '#fff', borderRadius: 16,
+            boxShadow: '0 24px 64px rgba(0,0,0,0.18)', padding: 0, overflow: 'hidden',
+          }}>
+            {/* Header */}
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <p style={{ ...sans, fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>
+                  Generate Bill — {pending.label}
+                </p>
+                <p style={{ ...mono, fontSize: 12, color: 'var(--ink4)', marginTop: 2 }}>
+                  Total: {formatINR(pending.gross)}
+                  {discountAmt > 0 && (
+                    <span style={{ color: '#16a34a', marginLeft: 6 }}>
+                      → {formatINR(parseFloat((pending.gross - discountAmt).toFixed(2)))} after discount
+                    </span>
+                  )}
+                </p>
+              </div>
+              <button onClick={() => setPending(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: 'var(--ink4)', lineHeight: 1 }}>×</button>
+            </div>
+
+            <div style={{ padding: '16px 20px' }}>
+              <p style={{ ...sans, fontSize: 11, fontWeight: 700, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 10 }}>
+                Apply Discount (Optional)
+              </p>
+
+              {/* Applied discount badge */}
+              {discountSel && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  background: '#F0FDF4', border: '1px solid #86EFAC',
+                  borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+                }}>
+                  <span style={{ ...sans, fontSize: 12, fontWeight: 600, color: '#166534' }}>
+                    {discountSel.kind === 'coupon' ? '🎟' : '⚡'} {discountSel.name}
+                    {discountSel.code && (
+                      <span style={{ marginLeft: 6, fontSize: 11, background: '#DCFCE7', padding: '1px 6px', borderRadius: 8 }}>
+                        {discountSel.code}
+                      </span>
+                    )}
+                    <span style={{ display: 'block', fontSize: 11, color: '#15803D', marginTop: 2 }}>
+                      −{formatINR(discountSel.amount)} saved
+                    </span>
+                  </span>
+                  <button onClick={() => setDiscountSel(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: '#86EFAC', lineHeight: 1 }}>×</button>
+                </div>
+              )}
+
+              {/* Preset chips */}
+              {!discountSel && presets.length > 0 && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                  {presets.map(p => {
+                    let amt = p.type === 'PERCENTAGE' ? (pending.gross * p.value) / 100 : p.value;
+                    if (p.max_discount_cap) amt = Math.min(amt, p.max_discount_cap);
+                    amt = parseFloat(Math.min(amt, pending.gross).toFixed(2));
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => { setDiscountSel({ kind: 'preset', id: p.id, name: p.name, amount: amt }); setManualDiscount(''); }}
+                        style={{
+                          ...sans, padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+                          border: '1px solid var(--border)', background: '#fff', color: 'var(--ink3)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ⚡ {p.name} ({p.type === 'PERCENTAGE' ? `${p.value}%` : `₹${p.value}`})
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Coupon input */}
+              {!discountSel && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      placeholder="Coupon code"
+                      value={couponInput}
+                      onChange={e => { setCouponInput(e.target.value.toUpperCase()); setCouponError(''); }}
+                      onKeyDown={e => e.key === 'Enter' && handleCouponApply()}
+                      style={{
+                        ...sans, flex: 1, padding: '8px 12px', borderRadius: 8,
+                        border: '1px solid var(--border)', fontSize: 13,
+                        textTransform: 'uppercase', letterSpacing: '0.04em', outline: 'none',
+                      }}
+                    />
+                    <button
+                      onClick={handleCouponApply}
+                      disabled={couponLoading || !couponInput.trim()}
+                      style={{
+                        ...sans, padding: '8px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                        background: couponInput.trim() ? 'var(--ink)' : 'var(--paper2)',
+                        color: couponInput.trim() ? '#fff' : 'var(--ink5)',
+                        border: 'none', cursor: couponInput.trim() ? 'pointer' : 'default',
+                        opacity: couponLoading ? 0.6 : 1,
+                      }}
+                    >
+                      {couponLoading ? '…' : 'Apply'}
+                    </button>
+                  </div>
+                  {couponError && <p style={{ ...sans, fontSize: 11, color: '#dc2626', marginTop: 4 }}>⚠ {couponError}</p>}
+                </div>
+              )}
+
+              {/* Manual flat discount */}
+              {!discountSel && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                  <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)', flex: 1 }}>Or flat discount (₹)</span>
+                  <input
+                    type="number" min="0" step="1" placeholder="0"
+                    value={manualDiscount}
+                    onChange={e => setManualDiscount(e.target.value)}
+                    style={{
+                      ...mono, width: 80, textAlign: 'right', padding: '5px 8px',
+                      border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: '#dc2626',
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Action buttons */}
+            <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
+              <button
+                onClick={confirmGenerate}
+                disabled={!!generating}
+                style={{
+                  ...sans, flex: 1, padding: '10px', borderRadius: 8,
+                  background: 'var(--ink)', color: '#fff', border: 'none',
+                  fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                  opacity: generating ? 0.6 : 1,
+                }}
+              >
+                {generating ? '⏳ Generating…' : discountAmt > 0
+                  ? `🧾 Generate — ${formatINR(parseFloat((pending.gross - discountAmt).toFixed(2)))}`
+                  : '🧾 Generate Bill'}
+              </button>
+              <button
+                onClick={() => setPending(null)}
+                style={{
+                  ...sans, padding: '10px 16px', borderRadius: 8, fontSize: 13,
+                  background: 'var(--paper2)', color: 'var(--ink4)', border: 'none', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* ── Table groups ── */}
       {Array.from(tableGroups.values()).map(({ table, orders: grpOrders }) => {
         const groupKey = `table-${table!.id}`;
         const totalAmt   = grpOrders.reduce((s: number, o: UnbilledOrder) => s + Number(o.total_amount), 0);
         const totalItems = grpOrders.reduce((s: number, o: UnbilledOrder) => s + o.items.filter((i: UnbilledOrder['items'][number]) => !i.is_cancelled).length, 0);
         const orderIds   = grpOrders.map((o: UnbilledOrder) => o.id);
-        const isBusy = generating === groupKey;
 
         return (
           <div key={groupKey} style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
@@ -997,17 +1531,20 @@ function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void })
                   {formatINR(totalAmt)}
                 </span>
                 <button
-                  onClick={() => generateCombined(orderIds, groupKey)}
-                  disabled={isBusy}
+                  onClick={() => openPicker({
+                    kind: 'combined', orderIds, key: groupKey,
+                    label: `Table ${table!.name}`,
+                    gross: totalAmt,
+                  })}
+                  disabled={!!generating}
                   style={{
                     ...sans, padding: '8px 18px', borderRadius: 8,
-                    background: isBusy ? 'var(--ink3)' : 'var(--ink)',
-                    color: '#fff', border: 'none',
-                    fontSize: 13, fontWeight: 700, cursor: isBusy ? 'not-allowed' : 'pointer',
-                    whiteSpace: 'nowrap', opacity: isBusy ? 0.7 : 1,
+                    background: 'var(--ink)', color: '#fff', border: 'none',
+                    fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                    whiteSpace: 'nowrap', opacity: generating ? 0.7 : 1,
                   }}
                 >
-                  {isBusy ? 'Generating…' : `🧾 Generate Combined Bill`}
+                  🧾 Generate Combined Bill
                 </button>
               </div>
             </div>
@@ -1115,6 +1652,7 @@ export default function BillingPage() {
     <>
       <style>{`
         @keyframes shimmer { 0%{background-position:-600px 0} 100%{background-position:600px 0} }
+        @keyframes slideInLeft { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
       `}</style>
 
       <div style={{ padding: '24px 28px', background: 'var(--paper, #fafaf9)', minHeight: 'calc(100vh - 56px)' }}>

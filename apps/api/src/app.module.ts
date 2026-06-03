@@ -15,6 +15,7 @@ import { UploadModule } from './modules/upload/upload.module';
 import { WebsocketModule } from './modules/websocket/websocket.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { TablesModule } from './modules/tables/tables.module';
+import { DiscountsModule } from './modules/discounts/discounts.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -52,6 +53,7 @@ import { PrismaModule } from './prisma/prisma.module';
     WebsocketModule,
     NotificationsModule,
     TablesModule,
+    DiscountsModule,
   ],
 })
 export class AppModule {}

@@ -23,6 +23,27 @@ interface Holiday {
   note?: string | null;
 }
 
+interface Discount {
+  id: string;
+  name: string;
+  description?: string | null;
+  code?: string | null;
+  type: string;
+  scope: string;
+  applied_by: string;
+  value: number;
+  max_discount_cap?: number | null;
+  min_order_amount?: number | null;
+  menu_item_id?: string | null;
+  category_id?: string | null;
+  max_uses_total?: number | null;
+  current_uses: number;
+  valid_until?: string | null;
+  is_active: boolean;
+  menuItem?: { id: string; name: string } | null;
+  category?: { id: string; name: string } | null;
+}
+
 interface RestaurantSettings {
   id: string;
   name: string;
@@ -905,16 +926,606 @@ function HolidaysSection({ data, onRefetch }: { data: RestaurantSettings; onRefe
   );
 }
 
+// ─── Discount Card ────────────────────────────────────────────────────────────
+
+function DiscountCard({
+  discount,
+  onToggle,
+  onDelete,
+  toggling,
+  deleting,
+}: {
+  discount: Discount;
+  onToggle: () => void;
+  onDelete: () => void;
+  toggling: boolean;
+  deleting: boolean;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const valueLabel =
+    discount.type === 'PERCENTAGE'
+      ? `${Number(discount.value)}% off`
+      : `₹${Number(discount.value).toFixed(0)} off`;
+
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: `1px solid ${discount.is_active ? 'var(--border)' : 'var(--border2, #e8e8e8)'}`,
+        borderRadius: 10,
+        padding: '12px 14px',
+        opacity: discount.is_active ? 1 : 0.65,
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: 12,
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Name + value badge */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)', fontFamily: "'Geist', sans-serif" }}>
+            {discount.name}
+          </span>
+          <span
+            style={{
+              fontSize: 12, fontWeight: 700,
+              background: discount.type === 'PERCENTAGE' ? '#EFF6FF' : '#F0FDF4',
+              color: discount.type === 'PERCENTAGE' ? '#1D4ED8' : '#166534',
+              padding: '1px 8px', borderRadius: 20,
+              fontFamily: "'Geist Mono', monospace",
+            }}
+          >
+            {valueLabel}
+          </span>
+          {discount.code && (
+            <span
+              style={{
+                fontSize: 11, fontWeight: 600, background: '#FEF3C7', color: '#92400E',
+                padding: '1px 8px', borderRadius: 20, letterSpacing: '0.05em',
+                fontFamily: "'Geist Mono', monospace",
+              }}
+            >
+              {discount.code}
+            </span>
+          )}
+          {!discount.is_active && (
+            <span style={{ fontSize: 11, background: '#F5F5F5', color: '#999', padding: '1px 7px', borderRadius: 20, fontFamily: "'Geist', sans-serif" }}>
+              Inactive
+            </span>
+          )}
+        </div>
+
+        {/* Meta info row */}
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {discount.max_discount_cap != null && (
+            <span style={{ fontSize: 11, color: 'var(--ink4)', fontFamily: "'Geist', sans-serif" }}>
+              Cap ₹{Number(discount.max_discount_cap).toFixed(0)}
+            </span>
+          )}
+          {discount.min_order_amount != null && (
+            <span style={{ fontSize: 11, color: 'var(--ink4)', fontFamily: "'Geist', sans-serif" }}>
+              Min ₹{Number(discount.min_order_amount).toFixed(0)}
+            </span>
+          )}
+          {discount.max_uses_total != null && (
+            <span style={{ fontSize: 11, color: 'var(--ink4)', fontFamily: "'Geist', sans-serif" }}>
+              {discount.current_uses}/{discount.max_uses_total} uses
+            </span>
+          )}
+          {discount.valid_until && (
+            <span style={{ fontSize: 11, color: 'var(--ink4)', fontFamily: "'Geist', sans-serif" }}>
+              Expires{' '}
+              {new Date(discount.valid_until).toLocaleDateString('en-IN', {
+                day: 'numeric', month: 'short', year: 'numeric',
+              })}
+            </span>
+          )}
+          {discount.menuItem && (
+            <span style={{ fontSize: 11, color: 'var(--ink4)', fontFamily: "'Geist', sans-serif" }}>
+              Item: {discount.menuItem.name}
+            </span>
+          )}
+          {discount.category && (
+            <span style={{ fontSize: 11, color: 'var(--ink4)', fontFamily: "'Geist', sans-serif" }}>
+              Category: {discount.category.name}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        <Toggle checked={discount.is_active} onChange={onToggle} disabled={toggling} />
+        {confirmDelete ? (
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button
+              onClick={onDelete}
+              disabled={deleting}
+              style={{
+                padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                background: 'var(--red, #dc2626)', color: '#fff', border: 'none',
+                cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+                opacity: deleting ? 0.6 : 1,
+              }}
+            >
+              Confirm
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              style={{
+                padding: '4px 8px', borderRadius: 6, fontSize: 11,
+                background: '#fff', color: 'var(--ink4)', border: '1px solid var(--border)',
+                cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+              }}
+            >
+              ×
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            style={{
+              padding: '4px 10px', borderRadius: 6, fontSize: 11,
+              background: 'var(--red-bg, #fef2f2)', color: 'var(--red, #dc2626)',
+              border: '1px solid rgba(220,38,38,0.15)', cursor: 'pointer',
+              fontFamily: "'Geist', sans-serif",
+            }}
+          >
+            Delete
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Section: Discounts & Coupons ─────────────────────────────────────────────
+
+type DiscountTab = 'presets' | 'coupons' | 'items';
+
+function DiscountsSection() {
+  const queryClient = useQueryClient();
+  const [dTab, setDTab] = useState<DiscountTab>('presets');
+  const [showForm, setShowForm] = useState(false);
+  const [generating, setGenerating] = useState(false);
+
+  // Single form state for all 3 tab types
+  const blankForm = {
+    name: '', type: 'PERCENTAGE', value: '',
+    max_discount_cap: '', min_order_amount: '',
+    // coupons only
+    code: '', max_uses_total: '', valid_until: '',
+    // items only
+    scope: 'SPECIFIC_ITEM', applied_by_item: 'WAITER_MANUAL',
+    menu_item_id: '', category_id: '',
+  };
+  const [form, setForm] = useState(blankForm);
+  const [formErr, setFormErr] = useState('');
+
+  function setF<K extends keyof typeof blankForm>(key: K, val: string) {
+    setForm(p => ({ ...p, [key]: val }));
+  }
+
+  // ── Fetch all discounts once; filter per tab client-side ──────────────────
+  const { data: allDiscounts = [], isLoading } = useQuery<Discount[]>({
+    queryKey: ['discounts', 'all'],
+    queryFn: () => api.get('/discounts').then(r => r.data),
+  });
+
+  const presets      = allDiscounts.filter(d => d.applied_by === 'WAITER_MANUAL' && d.scope === 'ENTIRE_ORDER');
+  const coupons      = allDiscounts.filter(d => d.applied_by === 'COUPON_CODE');
+  const itemDiscount = allDiscounts.filter(d => d.scope === 'SPECIFIC_ITEM' || d.scope === 'CATEGORY');
+
+  const tabItems = dTab === 'presets' ? presets : dTab === 'coupons' ? coupons : itemDiscount;
+
+  // ── Fetch menu categories for item tab selectors ──────────────────────────
+  const { data: categories = [] } = useQuery<{ id: string; name: string; menuItems: { id: string; name: string }[] }[]>({
+    queryKey: ['menu-categories-settings'],
+    queryFn: () => api.get('/menu/categories').then(r => r.data),
+    enabled: dTab === 'items' && showForm,
+  });
+
+  // ── Mutations ────────────────────────────────────────────────────────────
+  const createMutation = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => api.post('/discounts', payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['discounts'] });
+      setShowForm(false);
+      setForm(blankForm);
+      setFormErr('');
+    },
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { message?: string } } };
+      setFormErr(e?.response?.data?.message || 'Failed to create discount');
+    },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
+      api.patch(`/discounts/${id}`, { is_active }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['discounts'] }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/discounts/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['discounts'] }),
+  });
+
+  // ── Generate coupon code from API ─────────────────────────────────────────
+  async function handleGenerateCode() {
+    setGenerating(true);
+    try {
+      const res = await api.get('/discounts/generate-code');
+      setF('code', res.data.code);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  // ── Build create payload and validate ─────────────────────────────────────
+  function handleCreate() {
+    setFormErr('');
+    const name  = form.name.trim();
+    const value = parseFloat(form.value);
+    if (!name)                              return setFormErr('Name is required');
+    if (isNaN(value) || value < 0)          return setFormErr('Enter a valid discount value (≥ 0)');
+    if (form.type === 'PERCENTAGE' && value > 100) return setFormErr('Percentage cannot exceed 100');
+
+    const payload: Record<string, unknown> = { name, type: form.type, value, is_active: true };
+
+    const cap = parseFloat(form.max_discount_cap);
+    const min = parseFloat(form.min_order_amount);
+    if (!isNaN(cap) && cap > 0) payload.max_discount_cap  = cap;
+    if (!isNaN(min) && min > 0) payload.min_order_amount  = min;
+
+    if (dTab === 'presets') {
+      payload.scope      = 'ENTIRE_ORDER';
+      payload.applied_by = 'WAITER_MANUAL';
+
+    } else if (dTab === 'coupons') {
+      const code = form.code.trim().toUpperCase();
+      if (!code) return setFormErr('Coupon code is required');
+      payload.scope      = 'ENTIRE_ORDER';
+      payload.applied_by = 'COUPON_CODE';
+      payload.code       = code;
+      const uses = parseInt(form.max_uses_total, 10);
+      if (!isNaN(uses) && uses > 0) payload.max_uses_total = uses;
+      if (form.valid_until) payload.valid_until = form.valid_until;
+
+    } else {
+      // items tab
+      payload.scope      = form.scope;
+      payload.applied_by = form.applied_by_item;
+      if (form.scope === 'SPECIFIC_ITEM') {
+        if (!form.menu_item_id) return setFormErr('Select a menu item');
+        payload.menu_item_id = form.menu_item_id;
+      } else {
+        if (!form.category_id) return setFormErr('Select a category');
+        payload.category_id = form.category_id;
+      }
+    }
+
+    createMutation.mutate(payload);
+  }
+
+  // ── Sub-tab pill style ────────────────────────────────────────────────────
+  const pillStyle = (id: DiscountTab): React.CSSProperties => ({
+    padding: '7px 15px', borderRadius: 20, border: 'none', cursor: 'pointer',
+    background: dTab === id ? 'var(--ink)' : 'var(--paper2, #f5f5f5)',
+    color: dTab === id ? '#fff' : 'var(--ink4)',
+    fontSize: 12, fontWeight: 600, fontFamily: "'Geist', sans-serif",
+    transition: 'all 0.15s',
+  });
+
+  const tabDesc: Record<DiscountTab, string> = {
+    presets: 'One-click presets staff can apply during billing — e.g. 10% loyalty, ₹50 flat off.',
+    coupons: 'Shareable codes customers or staff enter at checkout. Track usage and expiry.',
+    items:   'Discounts on specific menu items or entire categories, applied automatically or manually.',
+  };
+
+  const newLabel: Record<DiscountTab, string> = {
+    presets: 'New Preset',
+    coupons: 'New Coupon',
+    items:   'New Item Discount',
+  };
+
+  const emptyIcon: Record<DiscountTab, string> = {
+    presets: '⚡', coupons: '🎟', items: '🍽',
+  };
+
+  return (
+    <div>
+      <p style={sectionLabelStyle}>Discounts &amp; Coupons</p>
+
+      {/* Sub-tab pills */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button style={pillStyle('presets')} onClick={() => { setDTab('presets'); setShowForm(false); setForm(blankForm); }}>
+          ⚡ Quick Presets
+        </button>
+        <button style={pillStyle('coupons')} onClick={() => { setDTab('coupons'); setShowForm(false); setForm(blankForm); }}>
+          🎟 Coupon Codes
+        </button>
+        <button style={pillStyle('items')} onClick={() => { setDTab('items'); setShowForm(false); setForm(blankForm); }}>
+          🍽 Item Discounts
+        </button>
+      </div>
+
+      <p style={{ fontSize: 12, color: 'var(--ink4)', fontFamily: "'Geist', sans-serif", marginBottom: 20 }}>
+        {tabDesc[dTab]}
+      </p>
+
+      {/* Discount list */}
+      {isLoading ? (
+        <div style={{ marginBottom: 16 }}>
+          {[1, 2].map(i => (
+            <div key={i} style={{ height: 68, borderRadius: 10, background: 'var(--paper3)', marginBottom: 8 }} />
+          ))}
+        </div>
+      ) : tabItems.length === 0 && !showForm ? (
+        <div style={{
+          padding: '28px 16px', textAlign: 'center',
+          border: '1.5px dashed var(--border)', borderRadius: 10, marginBottom: 16,
+        }}>
+          <p style={{ fontSize: 26, marginBottom: 6 }}>{emptyIcon[dTab]}</p>
+          <p style={{ fontSize: 13, color: 'var(--ink4)', fontFamily: "'Geist', sans-serif" }}>
+            No {dTab === 'presets' ? 'quick presets' : dTab === 'coupons' ? 'coupon codes' : 'item discounts'} yet
+          </p>
+          <p style={{ fontSize: 12, color: 'var(--ink5)', fontFamily: "'Geist', sans-serif", marginTop: 4 }}>
+            Click &ldquo;{newLabel[dTab]}&rdquo; below to create one
+          </p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+          {tabItems.map(d => (
+            <DiscountCard
+              key={d.id}
+              discount={d}
+              onToggle={() => toggleMutation.mutate({ id: d.id, is_active: !d.is_active })}
+              onDelete={() => deleteMutation.mutate(d.id)}
+              toggling={toggleMutation.isPending}
+              deleting={deleteMutation.isPending}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── Create form ─── */}
+      {showForm ? (
+        <div style={{ background: 'var(--paper2, #f5f5f5)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+          <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', fontFamily: "'Geist', sans-serif", marginBottom: 16 }}>
+            New {newLabel[dTab]}
+          </p>
+
+          {/* Name */}
+          <FieldRow label="Name">
+            <input
+              style={inputStyle}
+              placeholder={
+                dTab === 'presets' ? 'e.g. Staff Discount 10%' :
+                dTab === 'coupons' ? 'e.g. Welcome Offer' :
+                'e.g. Tuesday Special'
+              }
+              value={form.name}
+              onChange={e => setF('name', e.target.value)}
+            />
+          </FieldRow>
+
+          {/* Coupon code field */}
+          {dTab === 'coupons' && (
+            <FieldRow label="Coupon Code">
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  style={{ ...inputStyle, flex: 1, textTransform: 'uppercase', letterSpacing: '0.05em' }}
+                  placeholder="e.g. WELCOME20"
+                  value={form.code}
+                  onChange={e => setF('code', e.target.value.toUpperCase())}
+                />
+                <button
+                  onClick={handleGenerateCode}
+                  disabled={generating}
+                  style={{
+                    ...saveButtonStyle, padding: '9px 14px', fontSize: 13, whiteSpace: 'nowrap',
+                    background: '#fff', color: 'var(--ink)', border: '1px solid var(--border)',
+                    opacity: generating ? 0.6 : 1,
+                  }}
+                >
+                  🎲 Generate
+                </button>
+              </div>
+            </FieldRow>
+          )}
+
+          {/* Item / Category selectors (items tab only) */}
+          {dTab === 'items' && (
+            <>
+              <FieldRow label="Scope">
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {[
+                    { v: 'SPECIFIC_ITEM', l: '🍽 Specific Item' },
+                    { v: 'CATEGORY',      l: '📂 Category' },
+                  ].map(opt => (
+                    <button
+                      key={opt.v}
+                      onClick={() => setForm(p => ({ ...p, scope: opt.v, menu_item_id: '', category_id: '' }))}
+                      style={{
+                        padding: '7px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500, cursor: 'pointer',
+                        fontFamily: "'Geist', sans-serif",
+                        ...(form.scope === opt.v
+                          ? { background: 'var(--ink)', color: '#fff', border: 'none' }
+                          : { background: '#fff', color: 'var(--ink4)', border: '1px solid var(--border)' }),
+                      }}
+                    >
+                      {opt.l}
+                    </button>
+                  ))}
+                </div>
+              </FieldRow>
+
+              {form.scope === 'SPECIFIC_ITEM' ? (
+                <FieldRow label="Menu Item">
+                  <select
+                    style={inputStyle}
+                    value={form.menu_item_id}
+                    onChange={e => setF('menu_item_id', e.target.value)}
+                  >
+                    <option value="">Select item…</option>
+                    {categories.map(cat => (
+                      <optgroup key={cat.id} label={cat.name}>
+                        {cat.menuItems.map(item => (
+                          <option key={item.id} value={item.id}>{item.name}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </FieldRow>
+              ) : (
+                <FieldRow label="Category">
+                  <select
+                    style={inputStyle}
+                    value={form.category_id}
+                    onChange={e => setF('category_id', e.target.value)}
+                  >
+                    <option value="">Select category…</option>
+                    {categories.map(cat => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    ))}
+                  </select>
+                </FieldRow>
+              )}
+
+              <FieldRow label="Applied by">
+                <select
+                  style={inputStyle}
+                  value={form.applied_by_item}
+                  onChange={e => setF('applied_by_item', e.target.value)}
+                >
+                  <option value="WAITER_MANUAL">Waiter (manual — added during billing)</option>
+                  <option value="CUSTOMER_AUTO">Customer (auto-applied on qualifying orders)</option>
+                </select>
+              </FieldRow>
+            </>
+          )}
+
+          {/* Type + Value */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <FieldRow label="Discount Type">
+              <select style={inputStyle} value={form.type} onChange={e => setF('type', e.target.value)}>
+                <option value="PERCENTAGE">Percentage (%)</option>
+                <option value="FIXED_AMOUNT">Fixed Amount (₹)</option>
+              </select>
+            </FieldRow>
+            <FieldRow label={form.type === 'PERCENTAGE' ? 'Value (0–100%)' : 'Value (₹)'}>
+              <input
+                type="number" min="0" step={form.type === 'PERCENTAGE' ? 1 : 0.5}
+                max={form.type === 'PERCENTAGE' ? 100 : undefined}
+                style={inputStyle}
+                placeholder={form.type === 'PERCENTAGE' ? 'e.g. 10' : 'e.g. 50'}
+                value={form.value}
+                onChange={e => setF('value', e.target.value)}
+              />
+            </FieldRow>
+          </div>
+
+          {/* Optional constraints */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            {form.type === 'PERCENTAGE' && (
+              <FieldRow label="Max Discount Cap ₹ — optional">
+                <input
+                  type="number" min="0" step="1"
+                  style={inputStyle} placeholder="e.g. 200 (limit ₹ saved)"
+                  value={form.max_discount_cap}
+                  onChange={e => setF('max_discount_cap', e.target.value)}
+                />
+              </FieldRow>
+            )}
+            <FieldRow label="Min Order Amount ₹ — optional">
+              <input
+                type="number" min="0" step="1"
+                style={inputStyle} placeholder="e.g. 500 (minimum to qualify)"
+                value={form.min_order_amount}
+                onChange={e => setF('min_order_amount', e.target.value)}
+              />
+            </FieldRow>
+          </div>
+
+          {/* Coupon-only constraints */}
+          {dTab === 'coupons' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <FieldRow label="Max Total Uses — optional">
+                <input
+                  type="number" min="1" step="1"
+                  style={inputStyle} placeholder="Unlimited"
+                  value={form.max_uses_total}
+                  onChange={e => setF('max_uses_total', e.target.value)}
+                />
+              </FieldRow>
+              <FieldRow label="Valid Until — optional">
+                <input
+                  type="date"
+                  style={inputStyle}
+                  value={form.valid_until}
+                  onChange={e => setF('valid_until', e.target.value)}
+                />
+              </FieldRow>
+            </div>
+          )}
+
+          {formErr && (
+            <p style={{ fontSize: 13, color: 'var(--red)', fontFamily: "'Geist', sans-serif", marginBottom: 12 }}>
+              ⚠ {formErr}
+            </p>
+          )}
+
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button
+              onClick={handleCreate}
+              disabled={createMutation.isPending}
+              style={{ ...saveButtonStyle, opacity: createMutation.isPending ? 0.6 : 1 }}
+            >
+              {createMutation.isPending ? 'Creating…' : 'Create'}
+            </button>
+            <button
+              onClick={() => { setShowForm(false); setForm(blankForm); setFormErr(''); }}
+              style={{
+                ...saveButtonStyle, background: '#fff', color: 'var(--ink)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => { setShowForm(true); setForm(blankForm); setFormErr(''); }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '9px 18px', borderRadius: 8,
+            background: 'var(--accent, var(--ink))', color: '#fff',
+            border: 'none', fontSize: 13, fontWeight: 600,
+            fontFamily: "'Geist', sans-serif", cursor: 'pointer',
+          }}
+        >
+          + {newLabel[dTab]}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 
-type SettingsTab = 'info' | 'hours' | 'ordering' | 'payments' | 'holidays';
+type SettingsTab = 'info' | 'hours' | 'ordering' | 'payments' | 'holidays' | 'discounts';
 
 const SETTINGS_TABS: { id: SettingsTab; label: string; icon: string }[] = [
-  { id: 'info',     label: 'Restaurant Info',    icon: '🏪' },
-  { id: 'hours',    label: 'Business Hours',      icon: '🕐' },
-  { id: 'ordering', label: 'Ordering',            icon: '📋' },
-  { id: 'payments', label: 'Payments & Tax',      icon: '💳' },
-  { id: 'holidays', label: 'Holidays',            icon: '📅' },
+  { id: 'info',      label: 'Restaurant Info',      icon: '🏪' },
+  { id: 'hours',     label: 'Business Hours',        icon: '🕐' },
+  { id: 'ordering',  label: 'Ordering',              icon: '📋' },
+  { id: 'payments',  label: 'Payments & Tax',        icon: '💳' },
+  { id: 'holidays',  label: 'Holidays',              icon: '📅' },
+  { id: 'discounts', label: 'Discounts & Coupons',   icon: '🏷' },
 ];
 
 export default function SettingsPage() {
@@ -1016,11 +1627,12 @@ export default function SettingsPage() {
 
           {/* ── Tab content ── */}
           <div style={{ background: '#fff', borderRadius: 12, border: '1px solid var(--border)', padding: '24px' }}>
-            {activeTab === 'info'     && <RestaurantInfoSection data={data} onRefetch={refetch} />}
-            {activeTab === 'hours'    && <BusinessHoursSection  data={data} onRefetch={refetch} />}
-            {activeTab === 'ordering' && <OrderingSection       data={data} onRefetch={refetch} />}
-            {activeTab === 'payments' && <PaymentsSection       data={data} onRefetch={refetch} />}
-            {activeTab === 'holidays' && <HolidaysSection       data={data} onRefetch={refetch} />}
+            {activeTab === 'info'      && <RestaurantInfoSection data={data} onRefetch={refetch} />}
+            {activeTab === 'hours'     && <BusinessHoursSection  data={data} onRefetch={refetch} />}
+            {activeTab === 'ordering'  && <OrderingSection       data={data} onRefetch={refetch} />}
+            {activeTab === 'payments'  && <PaymentsSection       data={data} onRefetch={refetch} />}
+            {activeTab === 'holidays'  && <HolidaysSection       data={data} onRefetch={refetch} />}
+            {activeTab === 'discounts' && <DiscountsSection />}
           </div>
 
         </div>
