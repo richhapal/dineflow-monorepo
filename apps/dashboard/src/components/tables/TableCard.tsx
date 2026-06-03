@@ -6,6 +6,16 @@ import { formatINR } from '@dineflow/utils';
 import { RestaurantTable } from './useTablesQR';
 import { STATUS_STYLES } from './StatusLegend';
 
+export type CardSize = 'sm' | 'md' | 'lg';
+
+const SIZE_CFG: Record<CardSize, {
+  minH: number; pad: string; nameSize: number; subSize: number; badgeFontSize: number;
+}> = {
+  sm: { minH: 72,  pad: '8px 8px',   nameSize: 11, subSize: 9,  badgeFontSize: 8  },
+  md: { minH: 96,  pad: '12px 10px', nameSize: 13, subSize: 10, badgeFontSize: 9  },
+  lg: { minH: 136, pad: '20px 14px', nameSize: 16, subSize: 12, badgeFontSize: 10 },
+};
+
 interface TableCardProps {
   table: RestaurantTable;
   selected: boolean;
@@ -14,6 +24,7 @@ interface TableCardProps {
   onDelete: () => void;
   onStatusChange: (status: TableStatus) => void;
   elapsedMin: number;
+  size?: CardSize;
 }
 
 const STATUS_ACTIONS: Partial<Record<TableStatus, TableStatus[]>> = {
@@ -41,7 +52,9 @@ export default function TableCard({
   onDelete,
   onStatusChange,
   elapsedMin,
+  size = 'md',
 }: TableCardProps) {
+  const sz = SIZE_CFG[size];
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -91,7 +104,7 @@ export default function TableCard({
         onClick={onClick}
         style={{
           borderRadius: 10,
-          padding: '12px 10px',
+          padding: sz.pad,
           cursor: 'pointer',
           background: style.bg,
           border: `1.5px solid ${isOvertime && table.status === TableStatus.OCCUPIED ? '#e05c00' : style.border}`,
@@ -99,8 +112,8 @@ export default function TableCard({
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: 3,
-          minHeight: 80,
+          gap: size === 'lg' ? 5 : 3,
+          minHeight: sz.minH,
           transition: 'transform .15s, box-shadow .15s',
           position: 'relative',
           outline: selected ? '2px solid var(--accent)' : 'none',
@@ -121,10 +134,11 @@ export default function TableCard({
         <span
           style={{
             fontFamily: "'Geist Mono', monospace",
-            fontSize: 13,
+            fontSize: sz.nameSize,
             fontWeight: 600,
             color: style.color,
             letterSpacing: '.02em',
+            textAlign: 'center',
           }}
         >
           {table.name}
@@ -135,7 +149,7 @@ export default function TableCard({
           <span
             style={{
               fontFamily: "'Geist', sans-serif",
-              fontSize: 10,
+              fontSize: sz.subSize,
               color: style.color,
               opacity: 0.7,
             }}
@@ -150,7 +164,7 @@ export default function TableCard({
               <span
                 style={{
                   fontFamily: "'Geist', sans-serif",
-                  fontSize: 11,
+                  fontSize: sz.subSize,
                   color: style.color,
                   opacity: 0.85,
                 }}
@@ -162,7 +176,7 @@ export default function TableCard({
               <span
                 style={{
                   fontFamily: "'Geist', sans-serif",
-                  fontSize: 10,
+                  fontSize: sz.subSize,
                   color: '#e05c00',
                   fontWeight: 600,
                 }}
@@ -178,7 +192,7 @@ export default function TableCard({
             <span
               style={{
                 fontFamily: "'Geist', sans-serif",
-                fontSize: 10,
+                fontSize: sz.subSize,
                 color: style.color,
                 opacity: 0.85,
                 fontWeight: 600,
@@ -190,7 +204,7 @@ export default function TableCard({
               <span
                 style={{
                   fontFamily: "'Geist Mono', monospace",
-                  fontSize: 11,
+                  fontSize: sz.subSize,
                   color: style.color,
                   opacity: 0.8,
                 }}
@@ -205,7 +219,7 @@ export default function TableCard({
           <span
             style={{
               fontFamily: "'Geist', sans-serif",
-              fontSize: 10,
+              fontSize: sz.subSize,
               color: style.color,
               opacity: 0.7,
             }}
@@ -218,7 +232,7 @@ export default function TableCard({
           <span
             style={{
               fontFamily: "'Geist', sans-serif",
-              fontSize: 10,
+              fontSize: sz.subSize,
               color: style.color,
               opacity: 0.7,
             }}
@@ -236,7 +250,7 @@ export default function TableCard({
               left: 4,
               background: 'var(--accent)',
               color: '#fff',
-              fontSize: 9,
+              fontSize: sz.badgeFontSize,
               fontWeight: 600,
               padding: '1px 5px',
               borderRadius: 100,
@@ -256,7 +270,7 @@ export default function TableCard({
               right: 24,
               background: 'rgba(0,0,0,.08)',
               color: style.color,
-              fontSize: 9,
+              fontSize: sz.badgeFontSize,
               fontWeight: 600,
               padding: '1px 5px',
               borderRadius: 100,
