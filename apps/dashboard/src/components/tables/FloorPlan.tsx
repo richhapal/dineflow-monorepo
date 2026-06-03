@@ -445,16 +445,25 @@ function SectionPill({
   useEffect(() => { setRenameVal(label); }, [label]);
 
   useEffect(() => {
-    if (renaming) setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 30);
+    if (renaming) {
+      committedRef.current = false; // reset for each new rename session
+      setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 30);
+    }
   }, [renaming]);
 
+  // Use a ref to prevent onBlur from double-firing after Enter commits
+  const committedRef = useRef(false);
+
   function commitRename() {
+    if (committedRef.current) return;
+    committedRef.current = true;
     const trimmed = renameVal.trim();
     if (trimmed && trimmed !== label) onRename?.(trimmed);
     setRenaming(false);
   }
 
   function cancelRename() {
+    committedRef.current = true; // prevent blur from re-firing
     setRenameVal(label);
     setRenaming(false);
   }
@@ -471,7 +480,7 @@ function SectionPill({
             if (e.key === 'Enter') commitRename();
             if (e.key === 'Escape') cancelRename();
           }}
-          onBlur={commitRename}
+          onBlur={() => { if (!committedRef.current) cancelRename(); }}
           style={{
             padding: '3px 10px',
             borderRadius: 100,

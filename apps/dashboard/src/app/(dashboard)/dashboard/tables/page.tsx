@@ -4,6 +4,7 @@ import { io, Socket } from 'socket.io-client';
 import { TableStatus } from '@dineflow/types';
 import { WEBSOCKET_EVENTS } from '@dineflow/config';
 import { useDashboardStore } from '@/lib/store';
+import { api } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -89,7 +90,7 @@ export default function TablesPage() {
     if (!trimmed || trimmed === oldName) return;
     try {
       // Bulk-rename all tables in DB with one PATCH
-      await (await import('@/lib/api')).api.patch('/tables/rename-section', {
+      await api.patch('/tables/rename-section', {
         old_name: oldName,
         new_name: trimmed,
       });
