@@ -70,6 +70,16 @@ export class BillingController {
     res.send(csv);
   }
 
+  @Post('generate-combined')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  generateCombined(
+    @CurrentUser() user: any,
+    @Body() body: { order_ids: string[] },
+  ) {
+    return this.billingService.generateCombinedBill(body.order_ids, user.restaurant_id);
+  }
+
   // ⚠ Static routes MUST come before :id to avoid NestJS matching them as a param
   @Post('checkout-table/:tableId')
   @UseGuards(JwtGuard)

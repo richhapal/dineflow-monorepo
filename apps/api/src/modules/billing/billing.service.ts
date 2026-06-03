@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RecordPaymentDto } from './dto/record-payment.dto';
 import { formatInvoiceNumber, getFinancialYear } from '@dineflow/utils';
@@ -128,6 +129,123 @@ export class BillingService {
       orderBy: { completed_at: 'desc' },
       take: 50,
     });
+  }
+
+  /** Generate ONE consolidated bill for a manually selected set of orders */
+  async generateCombinedBill(orderIds: string[], restaurantId: string) {
+    if (!orderIds || orderIds.length === 0) throw new BadRequestException('No orders provided');
+
+    // 1. Load all orders
+    const orders = await this.prisma.order.findMany({
+      where: {
+        id: { in: orderIds },
+        restaurant_id: restaurantId,
+        status: { in: ['SERVED', 'COMPLETED'] as any[] },
+        deleted_at: null,
+      },
+      include: { items: { include: { addons: true } } },
+    });
+
+    if (orders.length !== orderIds.length) {
+      throw new BadRequestException('Some orders were not found or are not yet served');
+    }
+
+    // 2. Ensure none already billed
+    const alreadyBilled = await this.prisma.bill.count({
+      where: { order_id: { in: orderIds } },
+    });
+    if (alreadyBilled > 0) throw new BadRequestException('One or more orders already have a bill');
+
+    // 3. All orders must share the same table (or all have no table)
+    const tableIds = [...new Set(orders.map((o: any) => o.table_id).filter(Boolean))];
+    if (tableIds.length > 1) throw new BadRequestException('Cannot combine orders from different tables');
+    const tableId: string | null = tableIds[0] ?? null;
+
+    // 4. Aggregate totals
+    const subtotal      = orders.reduce((s: number, o: any) => s + Number(o.subtotal), 0);
+    const cgstAmount    = orders.reduce((s: number, o: any) => s + Number(o.cgst_amount), 0);
+    const sgstAmount    = orders.reduce((s: number, o: any) => s + Number(o.sgst_amount), 0);
+    const serviceCharge = orders.reduce((s: number, o: any) => s + Number(o.service_charge), 0);
+    const discountAmount= orders.reduce((s: number, o: any) => s + Number(o.discount_amount || 0), 0);
+    const totalAmount   = orders.reduce((s: number, o: any) => s + Number(o.total_amount), 0);
+
+    const bill = await this.prisma.$transaction(async (tx) => {
+      const restaurant = await tx.restaurant.update({
+        where: { id: restaurantId },
+        data: { invoice_seq_counter: { increment: 1 } },
+      });
+      const invoiceNumber  = formatInvoiceNumber(restaurantId.slice(-4).toUpperCase(), restaurant.invoice_seq_counter);
+      const financialYear  = getFinancialYear();
+      const halfRate       = Number(restaurant.gst_rate) / 2;
+
+      // 5. Find or create a TableSession so getBill can return per-person data
+      let sessionId: string | null = null;
+      if (tableId) {
+        // Try existing active session without a bill already
+        let session = await (tx as any).tableSession.findFirst({
+          where: {
+            table_id: tableId,
+            restaurant_id: restaurantId,
+            status: 'ACTIVE',
+            bill: null,          // only if it has no bill yet
+          },
+        });
+        if (!session) {
+          // Create a fresh session purely to carry per-person data
+          session = await (tx as any).tableSession.create({
+            data: {
+              restaurant_id: restaurantId,
+              table_id: tableId,
+              session_qr_slug: randomBytes(4).toString('hex'),
+              status: 'ACTIVE',
+            },
+          });
+        }
+        sessionId = session.id;
+        // Link all orders to this session so getBill returns them
+        await tx.order.updateMany({
+          where: { id: { in: orderIds } },
+          data: { table_session_id: sessionId } as any,
+        });
+      }
+
+      // 6. Create ONE consolidated bill
+      const newBill = await tx.bill.create({
+        data: {
+          order_id: null,
+          table_session_id: sessionId,
+          restaurant_id: restaurantId,
+          invoice_number: invoiceNumber,
+          financial_year: financialYear,
+          subtotal,
+          cgst_rate: halfRate,
+          cgst_amount: cgstAmount,
+          sgst_rate: halfRate,
+          sgst_amount: sgstAmount,
+          service_charge: serviceCharge,
+          discount_amount: discountAmount,
+          total_amount: totalAmount,
+          hsn_code: HSN_CODE,
+          status: 'GENERATED',
+        } as any,
+      });
+
+      // 7. Mark all orders COMPLETED and close the session
+      await tx.order.updateMany({
+        where: { id: { in: orderIds } },
+        data: { status: 'COMPLETED' as any },
+      });
+      if (sessionId) {
+        await (tx as any).tableSession.update({
+          where: { id: sessionId },
+          data: { status: 'CLOSED', closed_at: new Date() },
+        });
+      }
+
+      return newBill;
+    });
+
+    return { bill, totalAmount, orderCount: orders.length };
   }
 
   async checkoutTable(tableId: string, restaurantId: string, paymentMethod: string) {

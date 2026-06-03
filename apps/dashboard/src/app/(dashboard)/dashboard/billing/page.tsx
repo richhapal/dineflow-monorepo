@@ -837,9 +837,10 @@ function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void })
     queryFn: () => api.get('/billing/unbilled-orders').then(r => r.data),
   });
 
+  // Track which group/order is generating: key = tableId or orderId
   const [generating, setGenerating] = useState<string | null>(null);
 
-  const generate = async (orderId: string) => {
+  const generateSingle = async (orderId: string) => {
     setGenerating(orderId);
     try {
       await api.post(`/billing/generate/${orderId}`, {});
@@ -850,10 +851,21 @@ function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void })
     }
   };
 
+  const generateCombined = async (orderIds: string[], key: string) => {
+    setGenerating(key);
+    try {
+      await api.post('/billing/generate-combined', { order_ids: orderIds });
+      qc.invalidateQueries({ queryKey: ['unbilled-orders'] });
+      onBillGenerated();
+    } finally {
+      setGenerating(null);
+    }
+  };
+
   if (isLoading) {
     return (
       <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-        {[1,2,3].map(i => (
+        {[1, 2, 3].map(i => (
           <div key={i} style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
             <Skeleton h={16} />
           </div>
@@ -875,75 +887,144 @@ function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void })
     );
   }
 
-  return (
-    <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-      <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--paper2)' }}>
-        <span style={{ ...sans, fontSize: 12, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
-          {orders.length} completed order{orders.length !== 1 ? 's' : ''} without a bill
-        </span>
-      </div>
-      {orders.map(order => {
-        const items = order.items.filter(i => !i.is_cancelled);
-        return (
-          <div
-            key={order.id}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 16,
-              padding: '14px 20px', borderBottom: '1px solid var(--border)',
-            }}
-          >
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={{ ...mono, fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>
-                  #{String(order.order_number ?? 0).padStart(2, '0')}
-                </span>
-                {order.table && (
-                  <span style={{
-                    ...sans, fontSize: 11, background: 'var(--amber-bg)', color: 'var(--amber)',
-                    padding: '1px 7px', borderRadius: 100, fontWeight: 500,
-                  }}>
-                    {order.table.name}
-                  </span>
-                )}
-                <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)' }}>
-                  {order.covers} guest{order.covers !== 1 ? 's' : ''}
-                </span>
-              </div>
-              <div style={{ display: 'flex', gap: 12 }}>
-                <span style={{ ...sans, fontSize: 12, color: 'var(--ink3)' }}>
-                  {order.customer_name || 'Guest'}
-                </span>
-                <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)' }}>
-                  {items.length} item{items.length !== 1 ? 's' : ''}
-                </span>
-                {order.completed_at && (
-                  <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)' }}>
-                    Completed {formatDate(order.completed_at)}
-                  </span>
-                )}
-              </div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-              <span style={{ ...mono, fontSize: 15, fontWeight: 700, color: 'var(--ink)' }}>
-                {formatINR(Number(order.total_amount))}
+  // ── Group by table; orders with no table are individual ──
+  const tableGroups: Map<string, { table: UnbilledOrder['table']; orders: UnbilledOrder[] }> = new Map();
+  const noTableOrders: UnbilledOrder[] = [];
+
+  for (const order of orders) {
+    if (order.table) {
+      const key = order.table.id;
+      if (!tableGroups.has(key)) tableGroups.set(key, { table: order.table, orders: [] });
+      tableGroups.get(key)!.orders.push(order);
+    } else {
+      noTableOrders.push(order);
+    }
+  }
+
+  const renderOrderRow = (order: UnbilledOrder, indent = false) => {
+    const items = order.items.filter(i => !i.is_cancelled);
+    return (
+      <div
+        key={order.id}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 16,
+          padding: `10px 20px 10px ${indent ? 36 : 20}px`,
+          borderBottom: '1px solid var(--border)',
+          background: indent ? 'var(--paper)' : '#fff',
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+            <span style={{ ...mono, fontSize: 12, fontWeight: 700, color: 'var(--ink)' }}>
+              #{String(order.order_number ?? 0).padStart(2, '0')}
+            </span>
+            <span style={{ ...sans, fontSize: 12, color: 'var(--ink3)' }}>
+              {order.customer_name || 'Guest'}
+            </span>
+            <span style={{ ...sans, fontSize: 11, color: 'var(--ink4)' }}>
+              · {items.length} item{items.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {items.slice(0, 3).map((it, i) => (
+              <span key={i} style={{ ...sans, fontSize: 11, color: 'var(--ink4)' }}>
+                {i > 0 ? '· ' : ''}{it.quantity}× {it.item_name}
               </span>
-              <button
-                onClick={() => generate(order.id)}
-                disabled={generating === order.id}
-                style={{
-                  ...sans, padding: '8px 16px', borderRadius: 8,
-                  background: 'var(--accent)', color: '#fff', border: 'none',
-                  fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                  opacity: generating === order.id ? 0.6 : 1,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {generating === order.id ? 'Generating…' : '+ Generate Bill'}
-              </button>
+            ))}
+            {items.length > 3 && (
+              <span style={{ ...sans, fontSize: 11, color: 'var(--ink4)' }}>+ {items.length - 3} more</span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <span style={{ ...mono, fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
+            {formatINR(Number(order.total_amount))}
+          </span>
+          {/* Individual button only when NOT inside a table group */}
+          {!indent && (
+            <button
+              onClick={() => generateSingle(order.id)}
+              disabled={generating === order.id}
+              style={{
+                ...sans, padding: '7px 14px', borderRadius: 8,
+                background: 'var(--accent)', color: '#fff', border: 'none',
+                fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                opacity: generating === order.id ? 0.6 : 1, whiteSpace: 'nowrap',
+              }}
+            >
+              {generating === order.id ? 'Generating…' : '+ Bill'}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+      {/* ── Table groups ── */}
+      {Array.from(tableGroups.values()).map(({ table, orders: grpOrders }) => {
+        const groupKey = `table-${table!.id}`;
+        const totalAmt   = grpOrders.reduce((s: number, o: UnbilledOrder) => s + Number(o.total_amount), 0);
+        const totalItems = grpOrders.reduce((s: number, o: UnbilledOrder) => s + o.items.filter((i: UnbilledOrder['items'][number]) => !i.is_cancelled).length, 0);
+        const orderIds   = grpOrders.map((o: UnbilledOrder) => o.id);
+        const isBusy = generating === groupKey;
+
+        return (
+          <div key={groupKey} style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+            {/* Group header */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '12px 20px', background: 'var(--paper2)', borderBottom: '1px solid var(--border)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{
+                  ...sans, fontSize: 13, fontWeight: 700, color: 'var(--amber)',
+                  background: 'var(--amber-bg)', padding: '2px 10px', borderRadius: 100,
+                }}>
+                  🪑 {table!.name}
+                </span>
+                <span style={{ ...sans, fontSize: 12, color: 'var(--ink4)' }}>
+                  {grpOrders.length} order{grpOrders.length !== 1 ? 's' : ''} · {totalItems} item{totalItems !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ ...mono, fontSize: 15, fontWeight: 700, color: 'var(--ink)' }}>
+                  {formatINR(totalAmt)}
+                </span>
+                <button
+                  onClick={() => generateCombined(orderIds, groupKey)}
+                  disabled={isBusy}
+                  style={{
+                    ...sans, padding: '8px 18px', borderRadius: 8,
+                    background: isBusy ? 'var(--ink3)' : 'var(--ink)',
+                    color: '#fff', border: 'none',
+                    fontSize: 13, fontWeight: 700, cursor: isBusy ? 'not-allowed' : 'pointer',
+                    whiteSpace: 'nowrap', opacity: isBusy ? 0.7 : 1,
+                  }}
+                >
+                  {isBusy ? 'Generating…' : `🧾 Generate Combined Bill`}
+                </button>
+              </div>
             </div>
+            {/* Individual orders inside group (indented, no button) */}
+            {grpOrders.map((o: UnbilledOrder) => renderOrderRow(o, true))}
           </div>
         );
       })}
+
+      {/* ── No-table orders (individual) ── */}
+      {noTableOrders.length > 0 && (
+        <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+          <div style={{ padding: '10px 20px', borderBottom: '1px solid var(--border)', background: 'var(--paper2)' }}>
+            <span style={{ ...sans, fontSize: 12, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+              Takeaway / No Table — {noTableOrders.length} order{noTableOrders.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+          {noTableOrders.map((o: UnbilledOrder) => renderOrderRow(o, false))}
+        </div>
+      )}
     </div>
   );
 }
