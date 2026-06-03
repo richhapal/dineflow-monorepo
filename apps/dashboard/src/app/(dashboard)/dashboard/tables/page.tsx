@@ -57,6 +57,43 @@ export default function TablesPage() {
   // ─── Section state ────────────────────────────────────────────────────────────
   const [selectedSection, setSelectedSection] = useState<string>(ALL_SECTION);
 
+  // Custom (user-created) sections — persisted in localStorage
+  const LS_CUSTOM_SECTIONS = 'dineflow_custom_sections';
+  const [customSections, setCustomSections] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try { return JSON.parse(localStorage.getItem(LS_CUSTOM_SECTIONS) || '[]'); }
+    catch { return []; }
+  });
+
+  function handleCreateSection(name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setCustomSections((prev) => {
+      if (prev.includes(trimmed)) return prev;
+      const next = [...prev, trimmed];
+      localStorage.setItem(LS_CUSTOM_SECTIONS, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function handleDeleteSection(name: string) {
+    setCustomSections((prev) => {
+      const next = prev.filter((s) => s !== name);
+      localStorage.setItem(LS_CUSTOM_SECTIONS, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  // Merge custom + DB-derived sections
+  const dbSections = useMemo(
+    () => Array.from(new Set(tables.map((t) => t.section ?? '').filter(Boolean))),
+    [tables],
+  );
+  const managedSections = useMemo(
+    () => Array.from(new Set([...customSections, ...dbSections])),
+    [customSections, dbSections],
+  );
+
   // ─── Elapsed time map (updates every 60s) ────────────────────────────────────
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -315,7 +352,7 @@ export default function TablesPage() {
         marginBottom: 20,
       }}>
         {([
-          { id: 'floor' as TableTab, label: 'Floor Plan', icon: '🪑' },
+          { id: 'floor' as TableTab, label: 'Table Layout', icon: '🪑' },
           { id: 'qrcodes' as TableTab, label: 'QR Codes', icon: '⬛', badge: qrCodes.length || undefined },
         ]).map(({ id, label, icon, badge }) => {
           const active = activeTab === id;
@@ -427,6 +464,9 @@ export default function TablesPage() {
               selectedTableId={popoverTable?.id ?? null}
               elapsedMap={elapsedMap}
               isLoading={tablesLoading}
+              managedSections={managedSections}
+              onCreateSection={handleCreateSection}
+              onDeleteSection={handleDeleteSection}
             />
           </div>
 
@@ -507,6 +547,7 @@ export default function TablesPage() {
         <AddTableModal
           tables={tables}
           editTable={editingTable}
+          managedSections={managedSections}
           onClose={() => {
             setShowAddModal(false);
             setEditingTable(null);

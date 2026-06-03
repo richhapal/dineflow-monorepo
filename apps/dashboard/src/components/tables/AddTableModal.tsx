@@ -7,6 +7,7 @@ interface AddTableModalProps {
   tables: RestaurantTable[];
   editTable?: RestaurantTable | null;
   onClose: () => void;
+  managedSections?: string[];
 }
 
 const TABLE_TYPES = [
@@ -33,6 +34,7 @@ export default function AddTableModal({
   tables,
   editTable,
   onClose,
+  managedSections,
 }: AddTableModalProps) {
   const { showToast } = useToast();
   const createTable = useCreateTable();
@@ -55,9 +57,12 @@ export default function AddTableModal({
   const [nameError, setNameError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Derive existing sections
-  const existingSections = Array.from(
+  // Derive existing sections — merge managed (incl. custom) with table-derived
+  const tableSections = Array.from(
     new Set(tables.map((t) => t.section ?? '').filter(Boolean)),
+  );
+  const existingSections = Array.from(
+    new Set([...(managedSections ?? []), ...tableSections]),
   );
 
   useEffect(() => {

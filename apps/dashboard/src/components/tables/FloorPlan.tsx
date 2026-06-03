@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TableStatus } from '@dineflow/types';
 import { RestaurantTable } from './useTablesQR';
 import TableCard, { CardSize } from './TableCard';
@@ -16,6 +16,10 @@ interface FloorPlanProps {
   selectedTableId: string | null;
   elapsedMap: Record<string, number>;
   isLoading: boolean;
+  // Section management
+  managedSections: string[];
+  onCreateSection: (name: string) => void;
+  onDeleteSection: (name: string) => void;
 }
 
 const ALL_SECTION = '__ALL__';
@@ -25,8 +29,6 @@ const LS_COLS = 'dineflow_fp_cols';
 const LS_SIZE = 'dineflow_fp_size';
 
 type GridCols = 3 | 4 | 6 | 8 | 'auto';
-
-// Card min-width per size used when gridCols === 'auto'
 const AUTO_MIN_W: Record<CardSize, number> = { sm: 90, md: 120, lg: 160 };
 
 function Skeleton({ h }: { h?: number }) {
@@ -45,7 +47,6 @@ function Skeleton({ h }: { h?: number }) {
   );
 }
 
-// ── Tiny pill button used for the toolbar ──────────────────────────────────────
 function ToolPill({
   active,
   onClick,
@@ -58,7 +59,6 @@ function ToolPill({
   return (
     <button
       onClick={onClick}
-      title={String(children)}
       style={{
         padding: '3px 9px',
         borderRadius: 6,
@@ -92,6 +92,9 @@ export default function FloorPlan({
   selectedTableId,
   elapsedMap,
   isLoading,
+  managedSections,
+  onCreateSection,
+  onDeleteSection,
 }: FloorPlanProps) {
   // ── Grid settings (persisted) ────────────────────────────────────────────────
   const [gridCols, setGridCols] = useState<GridCols>(() => {
@@ -108,114 +111,216 @@ export default function FloorPlan({
     return v && ['sm', 'md', 'lg'].includes(v) ? v : 'md';
   });
 
-  // Persist to localStorage whenever changed
-  useEffect(() => {
-    localStorage.setItem(LS_COLS, String(gridCols));
-  }, [gridCols]);
-  useEffect(() => {
-    localStorage.setItem(LS_SIZE, cardSize);
-  }, [cardSize]);
+  useEffect(() => { localStorage.setItem(LS_COLS, String(gridCols)); }, [gridCols]);
+  useEffect(() => { localStorage.setItem(LS_SIZE, cardSize); }, [cardSize]);
 
-  // ── Section filtering ────────────────────────────────────────────────────────
-  const sections = Array.from(
-    new Set(tables.map((t) => t.section ?? 'Main').filter(Boolean)),
-  );
-  const allSections = [ALL_SECTION, ...sections];
+  // ── Section management state ──────────────────────────────────────────────────
+  const [editMode, setEditMode] = useState(false);
+  const [addingSection, setAddingSection] = useState(false);
+  const [newSectionName, setNewSectionName] = useState('');
+  const addInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (addingSection) setTimeout(() => addInputRef.current?.focus(), 50);
+  }, [addingSection]);
+
+  // Derive table counts per section (to know if a section can be deleted)
+  const sectionCount = tables.reduce<Record<string, number>>((acc, t) => {
+    const s = t.section ?? '';
+    if (s) acc[s] = (acc[s] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  // Merge managed + DB-derived sections (deduplicated, preserving order)
+  const tableSections = Array.from(new Set(tables.map((t) => t.section ?? '').filter(Boolean)));
+  const displaySections = Array.from(new Set([...managedSections, ...tableSections]));
 
   const visibleTables =
     selectedSection === ALL_SECTION
       ? tables
-      : tables.filter((t) => (t.section ?? 'Main') === selectedSection);
+      : tables.filter((t) => (t.section ?? '') === selectedSection);
 
-  // ── Grid CSS ─────────────────────────────────────────────────────────────────
   const gridTemplate =
     gridCols === 'auto'
       ? `repeat(auto-fill, minmax(${AUTO_MIN_W[cardSize]}px, 1fr))`
       : `repeat(${gridCols}, 1fr)`;
 
+  function handleAddSection() {
+    const name = newSectionName.trim();
+    if (!name) { setAddingSection(false); return; }
+    onCreateSection(name);
+    setNewSectionName('');
+    setAddingSection(false);
+  }
+
   return (
     <>
       <style>{`@keyframes shimmer{0%{background-position:-600px 0}100%{background-position:600px 0}}`}</style>
 
-      {/* ── Top bar: section pills (left) + view controls (right) ────────────── */}
+      {/* ── Controls row ─────────────────────────────────────────────────────── */}
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'flex-start',
           justifyContent: 'space-between',
           flexWrap: 'wrap',
           gap: 8,
           marginBottom: 16,
         }}
       >
-        {/* Section filter pills */}
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {allSections.map((s) => {
-            const active = selectedSection === s;
-            const label = s === ALL_SECTION ? 'All sections' : s;
-            return (
-              <button
-                key={s}
-                onClick={() => onSectionChange(s)}
+        {/* LEFT: section pills + add/edit controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+
+          {/* All-sections pill */}
+          <SectionPill
+            label="All sections"
+            active={selectedSection === ALL_SECTION}
+            count={tables.length}
+            editMode={false}
+            canDelete={false}
+            onClick={() => { onSectionChange(ALL_SECTION); }}
+            onDelete={() => {}}
+          />
+
+          {/* Per-section pills */}
+          {displaySections.map((s) => (
+            <SectionPill
+              key={s}
+              label={s}
+              active={selectedSection === s}
+              count={sectionCount[s] ?? 0}
+              editMode={editMode}
+              canDelete={(sectionCount[s] ?? 0) === 0}
+              onClick={() => { if (!editMode) onSectionChange(s); }}
+              onDelete={() => {
+                onDeleteSection(s);
+                if (selectedSection === s) onSectionChange(ALL_SECTION);
+              }}
+            />
+          ))}
+
+          {/* Add section inline input */}
+          {addingSection ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input
+                ref={addInputRef}
+                value={newSectionName}
+                onChange={(e) => setNewSectionName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleAddSection();
+                  if (e.key === 'Escape') { setAddingSection(false); setNewSectionName(''); }
+                }}
+                placeholder="Section name…"
                 style={{
-                  padding: '4px 14px',
+                  padding: '3px 10px',
                   borderRadius: 100,
-                  background: active ? 'var(--accent-bg)' : 'transparent',
-                  color: active ? 'var(--accent)' : 'var(--ink4)',
-                  border: active
-                    ? '1px solid var(--accent-border)'
-                    : '1px solid var(--border)',
+                  border: '1.5px solid var(--accent)',
+                  fontFamily: "'Geist', sans-serif",
+                  fontSize: 12,
+                  color: 'var(--ink)',
+                  background: 'var(--accent-bg)',
+                  outline: 'none',
+                  width: 130,
+                }}
+              />
+              <button
+                onClick={handleAddSection}
+                style={{
+                  padding: '3px 10px',
+                  borderRadius: 100,
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  border: 'none',
                   fontFamily: "'Geist', sans-serif",
                   fontSize: 12,
                   cursor: 'pointer',
-                  transition: 'all .15s',
+                  fontWeight: 600,
                 }}
               >
-                {label}
+                Add
               </button>
-            );
-          })}
+              <button
+                onClick={() => { setAddingSection(false); setNewSectionName(''); }}
+                style={{
+                  padding: '3px 8px',
+                  borderRadius: 100,
+                  background: 'transparent',
+                  color: 'var(--ink4)',
+                  border: '1px solid var(--border)',
+                  fontFamily: "'Geist', sans-serif",
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setAddingSection(true)}
+              title="Add new section"
+              style={{
+                padding: '4px 10px',
+                borderRadius: 100,
+                background: 'transparent',
+                color: 'var(--accent)',
+                border: '1.5px dashed var(--accent-border)',
+                fontFamily: "'Geist', sans-serif",
+                fontSize: 12,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                transition: 'all .15s',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-bg)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+              }}
+            >
+              + Section
+            </button>
+          )}
+
+          {/* Edit/done toggle — only show when sections exist */}
+          {displaySections.length > 0 && (
+            <button
+              onClick={() => setEditMode((v) => !v)}
+              title={editMode ? 'Done editing' : 'Manage sections'}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 100,
+                background: editMode ? 'var(--amber-bg, #fff8e6)' : 'transparent',
+                color: editMode ? 'var(--amber, #b45309)' : 'var(--ink4)',
+                border: editMode
+                  ? '1px solid var(--amber-border, #f0c060)'
+                  : '1px solid var(--border)',
+                fontFamily: "'Geist', sans-serif",
+                fontSize: 12,
+                cursor: 'pointer',
+                transition: 'all .15s',
+              }}
+            >
+              {editMode ? '✓ Done' : '✏ Manage'}
+            </button>
+          )}
         </div>
 
-        {/* View controls */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            flexShrink: 0,
-          }}
-        >
-          {/* Card size */}
+        {/* RIGHT: size + columns controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span style={{
-              fontFamily: "'Geist', sans-serif",
-              fontSize: 11,
-              color: 'var(--ink4)',
-              marginRight: 2,
-            }}>
-              Size
-            </span>
+            <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)', marginRight: 2 }}>Size</span>
             {(['sm', 'md', 'lg'] as CardSize[]).map((s) => (
               <ToolPill key={s} active={cardSize === s} onClick={() => setCardSize(s)}>
                 {s === 'sm' ? 'S' : s === 'md' ? 'M' : 'L'}
               </ToolPill>
             ))}
           </div>
-
-          {/* Divider */}
           <div style={{ width: 1, height: 18, background: 'var(--border2)' }} />
-
-          {/* Columns */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span style={{
-              fontFamily: "'Geist', sans-serif",
-              fontSize: 11,
-              color: 'var(--ink4)',
-              marginRight: 2,
-            }}>
-              Cols
-            </span>
+            <span style={{ fontFamily: "'Geist', sans-serif", fontSize: 11, color: 'var(--ink4)', marginRight: 2 }}>Cols</span>
             {([3, 4, 6, 8, 'auto'] as GridCols[]).map((c) => (
               <ToolPill key={c} active={gridCols === c} onClick={() => setGridCols(c)}>
                 {c === 'auto' ? '⊞' : c}
@@ -224,6 +329,26 @@ export default function FloorPlan({
           </div>
         </div>
       </div>
+
+      {/* Edit mode hint banner */}
+      {editMode && (
+        <div style={{
+          marginBottom: 12,
+          padding: '8px 14px',
+          borderRadius: 8,
+          background: 'var(--amber-bg, #fff8e6)',
+          border: '1px solid var(--amber-border, #f0c060)',
+          fontFamily: "'Geist', sans-serif",
+          fontSize: 12,
+          color: 'var(--amber, #b45309)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}>
+          <span>✏</span>
+          <span>Sections with no tables can be removed. Click <strong>✕</strong> on a section pill to delete it.</span>
+        </div>
+      )}
 
       {/* ── Grid ──────────────────────────────────────────────────────────────── */}
       {isLoading ? (
@@ -247,8 +372,6 @@ export default function FloorPlan({
               size={cardSize}
             />
           ))}
-
-          {/* Add table placeholder */}
           <button
             onClick={onAddTable}
             style={{
@@ -278,16 +401,99 @@ export default function FloorPlan({
             }}
           >
             <span style={{ fontSize: cardSize === 'lg' ? 24 : 18, lineHeight: 1 }}>+</span>
-            <span style={{
-              fontFamily: "'Geist', sans-serif",
-              fontSize: cardSize === 'lg' ? 13 : cardSize === 'sm' ? 10 : 11,
-              fontWeight: 500,
-            }}>
+            <span style={{ fontFamily: "'Geist', sans-serif", fontSize: cardSize === 'lg' ? 13 : cardSize === 'sm' ? 10 : 11, fontWeight: 500 }}>
               Add table
             </span>
           </button>
         </div>
       )}
     </>
+  );
+}
+
+// ── Section pill (reusable) ────────────────────────────────────────────────────
+function SectionPill({
+  label,
+  active,
+  count,
+  editMode,
+  canDelete,
+  onClick,
+  onDelete,
+}: {
+  label: string;
+  active: boolean;
+  count: number;
+  editMode: boolean;
+  canDelete: boolean;
+  onClick: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 0,
+        borderRadius: 100,
+        background: active ? 'var(--accent-bg)' : 'transparent',
+        border: active ? '1px solid var(--accent-border)' : '1px solid var(--border)',
+        overflow: 'hidden',
+        transition: 'all .15s',
+      }}
+    >
+      <button
+        onClick={onClick}
+        style={{
+          padding: '4px 12px',
+          background: 'transparent',
+          border: 'none',
+          color: active ? 'var(--accent)' : 'var(--ink4)',
+          fontFamily: "'Geist', sans-serif",
+          fontSize: 12,
+          cursor: editMode ? 'default' : 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+        }}
+      >
+        {label}
+        {count > 0 && (
+          <span style={{
+            background: active ? 'var(--accent)' : 'var(--paper3)',
+            color: active ? '#fff' : 'var(--ink4)',
+            borderRadius: 100,
+            fontSize: 10,
+            fontWeight: 600,
+            padding: '0 5px',
+            lineHeight: '16px',
+            fontFamily: "'Geist', sans-serif",
+          }}>
+            {count}
+          </span>
+        )}
+      </button>
+
+      {/* Delete button — only visible in edit mode */}
+      {editMode && (
+        <button
+          onClick={(e) => { e.stopPropagation(); if (canDelete) onDelete(); }}
+          title={canDelete ? `Remove "${label}"` : `Move all tables out of "${label}" first`}
+          style={{
+            padding: '4px 8px 4px 2px',
+            background: 'transparent',
+            border: 'none',
+            cursor: canDelete ? 'pointer' : 'not-allowed',
+            color: canDelete ? 'var(--red, #dc2626)' : 'var(--ink4)',
+            fontSize: 11,
+            lineHeight: 1,
+            opacity: canDelete ? 1 : 0.35,
+            fontWeight: 700,
+          }}
+        >
+          ✕
+        </button>
+      )}
+    </div>
   );
 }
