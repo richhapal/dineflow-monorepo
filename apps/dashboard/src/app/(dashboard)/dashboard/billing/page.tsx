@@ -1,6 +1,7 @@
 'use client';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { formatINR, formatDate } from '@dineflow/utils';
 import { useDashboardStore } from '@/lib/store';
@@ -1035,6 +1036,8 @@ function UnbilledOrdersTab({ onBillGenerated }: { onBillGenerated: () => void })
 
 export default function BillingPage() {
   const { restaurant } = useDashboardStore();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const qc = useQueryClient();
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -1043,6 +1046,17 @@ export default function BillingPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
   const [activeTab, setActiveTab] = useState<'bills' | 'unbilled'>('bills');
+
+  // Auto-open a bill if redirected from the custom bill page (?bill=<id>)
+  useEffect(() => {
+    const billId = searchParams.get('bill');
+    if (billId) {
+      setSelectedBillId(billId);
+      setActiveTab('bills');
+      // Clean the URL param without full reload
+      router.replace('/dashboard/billing');
+    }
+  }, [searchParams, router]);
 
   const { data: billsRes, isLoading: billsLoading } = useQuery<BillsResponse>({
     queryKey: ['bills', month, year],
@@ -1122,15 +1136,26 @@ export default function BillingPage() {
               <button onClick={handleNextMonth} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--ink4)', padding: '0 4px' }}>→</button>
             </div>
           </div>
-          <button
-            onClick={handleExport}
-            style={{
-              ...sans, padding: '9px 18px', background: '#F0FDF4', color: '#15803D',
-              border: '1px solid #BBF7D0', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer',
-            }}
-          >
-            ↓ Export GSTR-1 CSV
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => router.push('/dashboard/billing/custom')}
+              style={{
+                ...sans, padding: '9px 18px', background: 'var(--ink)', color: '#fff',
+                border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              ＋ Custom Bill
+            </button>
+            <button
+              onClick={handleExport}
+              style={{
+                ...sans, padding: '9px 18px', background: '#F0FDF4', color: '#15803D',
+                border: '1px solid #BBF7D0', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              ↓ Export GSTR-1 CSV
+            </button>
+          </div>
         </div>
 
         {/* ── GST Summary Banner ── */}

@@ -4,6 +4,7 @@ import { Queue } from 'bull';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RecordPaymentDto } from './dto/record-payment.dto';
+import { CreateCustomBillDto } from './dto/create-custom-bill.dto';
 import { formatInvoiceNumber, getFinancialYear } from '@dineflow/utils';
 import { HSN_CODE } from '@dineflow/config';
 import * as Papa from 'papaparse';
@@ -379,6 +380,135 @@ export class BillingService {
     });
 
     return { bill, totalAmount, orderCount: orders.length };
+  }
+
+  /** Create a bill directly from a waiter-built cart (no prior QR order) */
+  async createCustomBill(dto: CreateCustomBillDto, restaurantId: string) {
+    // ── 1. Validate ──────────────────────────────────────────────────────────
+    if (!dto.items || dto.items.length === 0) {
+      throw new BadRequestException('At least one item is required');
+    }
+    for (const item of dto.items) {
+      if (!item.item_name?.trim()) throw new BadRequestException('Each item must have a name');
+      if (item.quantity <= 0)      throw new BadRequestException(`Quantity for "${item.item_name}" must be > 0`);
+      if (item.unit_price < 0)    throw new BadRequestException(`Price for "${item.item_name}" cannot be negative`);
+    }
+
+    // ── 2. Validate table belongs to restaurant (if provided) ─────────────
+    if (dto.table_id) {
+      const table = await this.prisma.restaurantTable.findFirst({
+        where: { id: dto.table_id, restaurant_id: restaurantId },
+      });
+      if (!table) throw new BadRequestException('Table not found');
+    }
+
+    // ── 3. Load restaurant settings ───────────────────────────────────────
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+    });
+    if (!restaurant) throw new NotFoundException('Restaurant not found');
+
+    // ── 4. Calculate totals ───────────────────────────────────────────────
+    const subtotal = dto.items.reduce(
+      (s, item) => s + item.quantity * item.unit_price, 0,
+    );
+    const gstRate     = Number(restaurant.gst_rate);
+    const halfRate    = gstRate / 2;
+    const cgstAmount  = parseFloat((subtotal * halfRate).toFixed(2));
+    const sgstAmount  = parseFloat((subtotal * halfRate).toFixed(2));
+    const scRate      = Number(restaurant.service_charge_rate ?? 0);
+    const serviceCharge = parseFloat((subtotal * scRate).toFixed(2));
+    const discount    = Math.min(Math.max(dto.discount_amount ?? 0, 0), subtotal + cgstAmount + sgstAmount + serviceCharge);
+    const total       = parseFloat((subtotal + cgstAmount + sgstAmount + serviceCharge - discount).toFixed(2));
+
+    // ── 5. Transactional creation ─────────────────────────────────────────
+    const bill = await this.prisma.$transaction(async (tx) => {
+      // Increment invoice sequence
+      const rest = await tx.restaurant.update({
+        where: { id: restaurantId },
+        data: { invoice_seq_counter: { increment: 1 } },
+      });
+      const invoiceNumber = formatInvoiceNumber(restaurantId.slice(-4).toUpperCase(), rest.invoice_seq_counter);
+      const financialYear = getFinancialYear();
+
+      // Create order (WAITER_PLACED, immediately COMPLETED)
+      const order = await tx.order.create({
+        data: {
+          restaurant_id: restaurantId,
+          table_id:      dto.table_id ?? null,
+          order_type:    (dto.order_type as any) ?? 'WAITER_PLACED',
+          status:        'COMPLETED' as any,
+          customer_name: dto.customer_name?.trim() || null,
+          customer_phone: dto.customer_phone?.trim() || null,
+          covers:        dto.covers ?? 1,
+          notes:         dto.notes?.trim() || null,
+          subtotal,
+          cgst_amount:   cgstAmount,
+          sgst_amount:   sgstAmount,
+          service_charge: serviceCharge,
+          discount_amount: discount,
+          total_amount:  total,
+          idempotency_key: randomBytes(16).toString('hex'),
+          completed_at:  new Date(),
+          items: {
+            create: dto.items.map((item) => ({
+              menu_item_id: item.menu_item_id ?? null,
+              item_name:    item.item_name.trim(),
+              quantity:     item.quantity,
+              unit_price:   item.unit_price,
+              total_price:  parseFloat((item.quantity * item.unit_price).toFixed(2)),
+              notes:        item.notes?.trim() || null,
+            })),
+          },
+        } as any,
+      });
+
+      // Create bill
+      const newBill = await tx.bill.create({
+        data: {
+          order_id:       order.id,
+          restaurant_id:  restaurantId,
+          invoice_number: invoiceNumber,
+          financial_year: financialYear,
+          customer_name:  dto.customer_name?.trim() || null,
+          customer_phone: dto.customer_phone?.trim() || null,
+          customer_gstin: dto.customer_gstin?.trim() || null,
+          subtotal,
+          cgst_rate:      halfRate,
+          cgst_amount:    cgstAmount,
+          sgst_rate:      halfRate,
+          sgst_amount:    sgstAmount,
+          service_charge: serviceCharge,
+          discount_amount: discount,
+          total_amount:   total,
+          hsn_code:       HSN_CODE,
+          status:         'GENERATED',
+        },
+      });
+
+      // Collect payment immediately if method provided
+      if (dto.payment_method) {
+        await tx.payment.create({
+          data: {
+            order_id:      order.id,
+            bill_id:       newBill.id,
+            restaurant_id: restaurantId,
+            method:        dto.payment_method as any,
+            status:        'PAID',
+            amount:        total,
+            upi_txn_id:    dto.upi_txn_id    ?? null,
+            gateway_ref:   dto.gateway_ref   ?? null,
+            notes:         dto.payment_notes ?? null,
+            paid_at:       new Date(),
+          } as any,
+        });
+        await tx.bill.update({ where: { id: newBill.id }, data: { status: 'PAID' } });
+      }
+
+      return newBill;
+    });
+
+    return bill;
   }
 
   async cancelBill(billId: string, restaurantId: string) {

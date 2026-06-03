@@ -6,6 +6,7 @@ import type { Response } from 'express';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { BillingService } from './billing.service';
 import { RecordPaymentDto } from './dto/record-payment.dto';
+import { CreateCustomBillDto } from './dto/create-custom-bill.dto';
 import { JwtGuard } from '../../common/guards/jwt.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -78,6 +79,13 @@ export class BillingController {
     @Body() body: { order_ids: string[] },
   ) {
     return this.billingService.generateCombinedBill(body.order_ids, user.restaurant_id);
+  }
+
+  @Post('custom')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  createCustomBill(@CurrentUser() user: any, @Body() dto: CreateCustomBillDto) {
+    return this.billingService.createCustomBill(dto, user.restaurant_id);
   }
 
   // ⚠ Static routes MUST come before :id to avoid NestJS matching them as a param

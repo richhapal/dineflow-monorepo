@@ -930,7 +930,7 @@ model Order {
 model OrderItem {
   id           String          @id @default(cuid())
   order_id     String
-  menu_item_id String
+  menu_item_id String?         // null for custom / free-form items not in the menu
   variant_id   String?
   quantity     Int
   unit_price   Decimal         @db.Decimal(10,2) // SNAPSHOT
@@ -942,7 +942,7 @@ model OrderItem {
   created_at         DateTime  @default(now())
 
   order        Order           @relation(fields: [order_id], references: [id], onDelete: Cascade)
-  menuItem     MenuItem        @relation(fields: [menu_item_id], references: [id])
+  menuItem     MenuItem?       @relation(fields: [menu_item_id], references: [id])
   variant      MenuItemVariant? @relation(fields: [variant_id], references: [id])
   addons       OrderItemAddon[]
 
